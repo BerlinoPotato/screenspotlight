@@ -49,6 +49,7 @@ def main():
         target.show()
         target.raise_()
         target.activateWindow()
+        c.panel.move(area.right() - c.panel.sizeHint().width() - 20, area.top() + 20)
         process()
         c.selected_screen = app.primaryScreen()
         start = target.mapToGlobal(QPoint(120, 100))

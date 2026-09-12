@@ -16,7 +16,7 @@ from emergency import EmergencyExit
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from spotlight import DIM_PRESETS, Overlay, Spotlight, circle_hit, rectangle_hit, move_rect, selection_rect
 
@@ -290,7 +290,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.c.focus, original.translated(1, 10))
         self.c.toggle_edit()
         self.assertEqual(self.c.mode, "present")
-        self.assertTrue(self.c.panel.isMinimized())
+        self.assertFalse(self.c.panel.isMinimized())
 
     def test_right_click_clears_edit_and_resets_drag(self):
         self.seed()
@@ -331,7 +331,8 @@ class AppTests(unittest.TestCase):
     def render_overlay(self):
         image = QImage(self.o.size(), QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
-        self.o.render(image)
+        # Test spotlight paint independently of the controls' input exclusion.
+        self.o.render(image, renderFlags=QWidget.RenderFlag.IgnoreMask)
         return image
 
     def test_presentation_has_clear_hole_and_dim_surroundings(self):
@@ -372,7 +373,7 @@ class AppTests(unittest.TestCase):
         image = self.render_overlay()
         self.assertAlmostEqual(image.pixelColor(40, 40).alpha(), 128, delta=1)
         self.assertEqual(image.pixelColor(40, 40).red(), 0)
-        self.assertTrue(self.c.panel.isMinimized())
+        self.assertFalse(self.c.panel.isMinimized())
 
     def test_escape_poll_does_not_require_native_hotkey_event(self):
         self.seed()

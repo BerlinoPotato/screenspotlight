@@ -9,19 +9,20 @@ import tempfile
 from pathlib import Path
 
 from emergency import EmergencyExit
+from annotations import AnnotationTools, tool_icon
 
 from PySide6.QtCore import (
-    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, Qt, QTimer,
+    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, Qt, QTimer,
 )
-from PySide6.QtGui import QColor, QCursor, QIcon, QPainter
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QRegion
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton,
-    QDialog, QMessageBox, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QDialog, QGroupBox, QMessageBox, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.23"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -144,12 +145,20 @@ class Overlay(QWidget):
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not editing)
         self.setGeometry(self.screen_ref.geometry())
+        self.sync_controls_mask()
         self.setCursor(Qt.CursorShape.CrossCursor if self.controller.mode == "select" else Qt.CursorShape.ArrowCursor)
         self.show()
         self.update()
 
     def local_rect(self):
         return self.controller.focus.translated(-QPointF(self.geometry().topLeft()))
+
+    def sync_controls_mask(self):
+        panel = self.controller.panel
+        region = QRegion(self.rect())
+        if panel.isVisible() and not panel.isMinimized():
+            region -= QRegion(panel.frameGeometry().translated(-self.geometry().topLeft()))
+        self.setMask(region)
 
     def paintEvent(self, event):
         c = self.controller
@@ -288,16 +297,24 @@ class Overlay(QWidget):
             super().keyPressEvent(event)
 
 
+class FullWidthTabs(QTabWidget):
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.tabBar().setFixedWidth(self.width())
+        self.tabBar().setExpanding(True)
+
+
 class Panel(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.setWindowTitle(WINDOW_TITLE)
+        self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setMinimumWidth(390)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 26, 28, 26)
-        layout.setSpacing(16)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(10)
         title = QLabel("Screen Spotlight")
         title.setStyleSheet("font-size: 25px; font-weight: 650;")
         header = QHBoxLayout()
@@ -310,10 +327,25 @@ class Panel(QWidget):
         self.info_button.clicked.connect(self.show_information)
         header.addWidget(self.info_button)
         layout.addLayout(header)
-        layout.addWidget(QLabel("Highlight shape"))
+        outer_layout = layout
+        self.tabs = FullWidthTabs()
+        self.tabs.setIconSize(QSize(44, 44))
+        spotlight_tab = QWidget()
+        layout = QVBoxLayout(spotlight_tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
+        spotlight_layout = layout
+        self.tabs.addTab(spotlight_tab, tool_icon("18 Spotlight.png"), "Spotlight")
+        controller.annotations = AnnotationTools(controller)
+        self.tabs.addTab(controller.annotations, tool_icon("01 Annotation.png"), "Annotation")
+        self.tabs.setTabToolTip(0, "Spotlight: select an area and dim its surroundings")
+        self.tabs.setTabToolTip(1, "Annotation: start drawing with the selected tool")
+        outer_layout.addWidget(self.tabs)
+        shape_box = QGroupBox("Highlight shape")
+        layout.addWidget(shape_box)
         self.shape_group = QButtonGroup(self)
         self.shape_buttons = {}
-        shape_row = QHBoxLayout()
+        shape_row = QHBoxLayout(shape_box)
         for name in ("Rectangle", "Circle"):
             button = QRadioButton(name)
             self.shape_group.addButton(button)
@@ -321,12 +353,12 @@ class Panel(QWidget):
             button.setChecked(name == controller.shape)
             shape_row.addWidget(button)
         self.shape_group.buttonClicked.connect(lambda button: controller.set_shape(button.text()))
-        layout.addLayout(shape_row)
+        dim_box = QGroupBox("Background dimming")
+        layout.addWidget(dim_box)
         self.dim_label = QLabel()
-        layout.addWidget(self.dim_label)
         self.dim_group = QButtonGroup(self)
         self.dim_buttons = {}
-        dim_row = QHBoxLayout()
+        dim_row = QHBoxLayout(dim_box)
         dim_row.setSpacing(12)
         for value in DIM_PRESETS:
             button = QRadioButton(f"{value}%")
@@ -335,8 +367,10 @@ class Panel(QWidget):
             button.setChecked(value == controller.dim)
             dim_row.addWidget(button)
         self.dim_group.idClicked.connect(controller.set_dim)
-        layout.addLayout(dim_row)
         self.dim_label.setText("Background dimming")
+        area_box = QGroupBox("Area")
+        layout.addWidget(area_box)
+        layout = QVBoxLayout(area_box)
         select = QPushButton("Select area")
         select.setObjectName("primary")
         select.clicked.connect(controller.select)
@@ -347,7 +381,12 @@ class Panel(QWidget):
             button.clicked.connect(action)
             row.addWidget(button)
         layout.addLayout(row)
-        self.status = QLabel("Ready — select an area to begin.")
+        for section_layout in (shape_row, dim_row, layout):
+            section_layout.setContentsMargins(8, 12, 8, 12)
+        spotlight_layout.addStretch()
+        layout = outer_layout
+        self.status = controller.annotations.status
+        self.status.setText("Ready — select an area to begin.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.information = QDialog(self)
@@ -367,6 +406,10 @@ class Panel(QWidget):
             "Esc / Ctrl+Shift+X   Clear and return to controls\n"
             "Right-click   Clear while selecting or editing\n"
             "Alt+Tab / Ctrl+Shift+P   Show controls\n\n"
+            "Annotation: click a tool to start drawing. Controls stay available.\n"
+            "Esc / Enter ends drawing and keeps the marks.\n"
+            "Ctrl+Z / Ctrl+Y undoes / redoes while drawing.\n"
+            "Capture defaults to the spotlight area, or the monitor if no area exists.\n\n"
             "While editing: arrows move; Shift+arrows move faster.\n"
             "R / C changes shape; + / minus adjusts dimming.\n\n"
             "100% dimming is solid black. New selections stay editable.\n"
@@ -404,12 +447,34 @@ class Panel(QWidget):
             QPushButton:hover { background: #2d4462; }
             QPushButton#primary { background: #71d6ff; color: #102235; font-weight: bold; border: none; }
             QPushButton:disabled { color: #67768b; }
+            QTabWidget::pane { border: none; }
+            QTabBar::tab { background: #213149; color: #edf4fc; padding: 9px 16px; border-bottom: 2px solid transparent; }
+            QTabBar::tab:selected { background: #2d4462; border-bottom-color: #71d6ff; }
+            QTabBar::tab { font-size: 20px; }
+            QGroupBox { font-size: 17px; border: 1px solid #526278; border-radius: 6px; margin-top: 14px; padding: 4px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #bed3e6; }
+            QGroupBox QRadioButton { padding: 2px 0; }
+            QToolTip { background: #f4f7fb; color: #142033; border: 1px solid #6a7b90; padding: 6px; }
         """)
         for button in self.dim_buttons.values():
             button.ensurePolished()
             button.setMinimumWidth(button.sizeHint().width())
+        self.tabs.currentChanged.connect(self.tab_changed)
+
+    def tab_changed(self, index):
+        annotations = self.controller.annotations
+        annotations.sync_capture_scope()
+        if index == 0:
+            if annotations.drawing:
+                annotations.interact()
+            self.status.setText({"off": "Ready", "select": "Selecting spotlight area",
+                                 "edit": "Editing spotlight area", "present": "Presenting spotlight"}[self.controller.mode])
+        elif not annotations.drawing:
+            annotations.start()
 
     def show_information(self):
+        if self.controller.annotations.drawing:
+            self.controller.annotations.interact()
         self.information.adjustSize()
         self.information.move(self.geometry().center() - self.information.rect().center())
         self.information.open()
@@ -436,12 +501,14 @@ class Spotlight:
             self.dim = 50
         self.dim = min(DIM_PRESETS, key=lambda value: abs(value - self.dim))
         self.mode = "off"
+        self.escape_held = False
         self.focus = QRectF()
         self.selected_screen = None
         self.overlays = []
         self.connected_screens = set()
         self.hotkey_errors = []
         self.panel = Panel(self)
+        self.panel.installEventFilter(self.annotations.overlay)
         self.icon = app_icon()
         app.setWindowIcon(self.icon)
         self.tray = QSystemTrayIcon(self.icon, self.panel)
@@ -492,11 +559,13 @@ class Spotlight:
         self.connected_screens.intersection_update(self.app.screens())
 
     def geometry_changed(self, *_):
+        self.annotations.reset_screen()
         self.clear()
         for overlay in self.overlays:
             overlay.setGeometry(overlay.screen_ref.geometry())
 
     def screens_changed(self, *_):
+        self.annotations.reset_screen()
         self.clear()
         self.rebuild_overlays()
 
@@ -508,8 +577,11 @@ class Spotlight:
         self.panel.showNormal()
         self.panel.raise_()
         self.panel.activateWindow()
+        self.annotations.sync_capture_scope()
+        self.annotations.overlay.sync_controls_mask()
 
     def repaint(self):
+        self.annotations.sync_capture_scope()
         for overlay in self.overlays:
             if self.selected_screen is not None and overlay.screen_ref != self.selected_screen:
                 overlay.hide()
@@ -537,8 +609,38 @@ class Spotlight:
 
     def poll_escape(self):
         # Independent of focus, RegisterHotKey success, and native event delivery.
-        if self.mode != "off" and self.emergency and self.emergency.key_down():
+        down = bool(self.emergency and self.emergency.key_down())
+        if down and not self.escape_held:
+            self.escape()
+        self.escape_held = down
+
+    def escape(self):
+        down = bool(self.emergency and self.emergency.key_down())
+        if down and self.escape_held:
+            return
+        self.escape_held = down
+        if self.annotations.drawing:
+            self.annotations.interact()
+        elif self.mode != "off":
             self.clear()
+
+    def disarm_escape(self):
+        self.escape_timer.stop()
+        if self.emergency:
+            self.emergency.active.clear()
+        if self.hotkeys:
+            self.hotkeys.unregister(3)
+
+    def arm_escape(self):
+        if not self.escape_timer.isActive():
+            self.escape_held = False
+        if self.emergency:
+            self.emergency.active.set()
+            self.escape_timer.start()
+        if self.hotkeys:
+            escape_ok = self.hotkeys.register(3, 0, 0x1B, self.escape)
+            warnings = self.hotkey_errors + ([] if escape_ok else ["Esc is unavailable globally; use Ctrl+Shift+X."])
+            self.panel.warning.setText("\n".join(warnings))
 
     def touch_interaction(self):
         if self.mode == "select":
@@ -549,28 +651,36 @@ class Spotlight:
             self.clear()
             self.panel.status.setText("Selection cleared after 60 seconds without interaction.")
 
-    def activate(self, mode):
+    def activate(self, mode, *, keep_controls=False):
+        if self.annotations.drawing:
+            self.annotations.interact()
         self.mode = mode
-        if self.emergency:
-            self.emergency.active.set()
-            self.escape_timer.start()
+        self.arm_escape()
         self.interaction_timer.stop()
         self.touch_interaction()
         if self.hotkeys:
-            escape_ok = self.hotkeys.register(3, 0, 0x1B, self.clear)
+            escape_ok = self.hotkeys.register(3, 0, 0x1B, self.escape)
             warnings = self.hotkey_errors + ([] if escape_ok else ["Esc is unavailable globally; use Ctrl+Shift+X or tray → Clear."])
             self.panel.warning.setText("\n".join(warnings))
         # Minimized normal windows remain in the taskbar and Alt+Tab.
         self.panel.information.hide()
-        self.panel.showMinimized()
+        if mode == "select" and not keep_controls:
+            self.panel.showMinimized()
+        else:
+            self.panel.showNormal()
         for overlay in self.overlays:
             overlay.present()
+        if self.annotations.screen and self.annotations.marks:
+            self.annotations.overlay.raise_()
         if mode in ("select", "edit"):
             screen = self.selected_screen if mode == "edit" else self.app.screenAt(QCursor.pos())
             active = next((o for o in self.overlays if o.screen_ref == screen), self.overlays[0])
             active.raise_()
             active.activateWindow()
             active.setFocus()
+        if mode != "select":
+            self.panel.raise_()
+            self.annotations.overlay.sync_controls_mask()
         self.panel.status.setText({"select": "Selecting — drag on a screen.",
                                    "edit": "Editing — move or resize, then press Enter.",
                                    "present": "Presenting — clicks pass through the spotlight."}[mode])
@@ -600,6 +710,8 @@ class Spotlight:
             self.edit()
 
     def clear(self):
+        if self.annotations.drawing:
+            self.annotations.interact()
         self.mode = "off"
         self.escape_timer.stop()
         self.interaction_timer.stop()
@@ -618,6 +730,7 @@ class Spotlight:
 
 
     def shutdown(self):
+        self.annotations.overlay.hide()
         self.escape_timer.stop()
         self.interaction_timer.stop()
         if self.emergency:

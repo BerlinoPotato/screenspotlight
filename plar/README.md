@@ -1,6 +1,6 @@
 # Screen Spotlight for PLAR
 
-This is a self-contained Python edition generated from the current `spotlight.py`, `emergency.py`, and `screenspotlight.png`. It uses no ScreenSpotlight.exe. Version 0.1.18 includes the compact interface, information overlay, plain title and version footer, image icon, and automatic return to controls when an area is cleared or canceled.
+This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.23 displays pen width, highlighter width, and marker size together and enables descriptive icon tooltips even while drawing has focus. Controls remain available for editing, presentation, and annotation.
 
 ## In PLAR
 

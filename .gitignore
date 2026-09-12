@@ -5,3 +5,4 @@ build/
 *.log
 panel-preview.png
 information-preview.png
+/dist/ScreenSpotlight/_internal

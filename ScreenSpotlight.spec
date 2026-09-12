@@ -5,7 +5,7 @@ a = Analysis(
     ['spotlight.py'],
     pathex=[],
     binaries=[],
-    datas=[('screenspotlight.png', '.')],
+    datas=[('screenspotlight.png', '.'), ('icons/*.png', 'icons')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

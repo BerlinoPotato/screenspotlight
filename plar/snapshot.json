@@ -1,6 +1,25 @@
 {
-  "spotlight.py": "c7baaf7795a0be4dfa72dc9720c88f50c2717990e63a77ee71c949267d80ea93",
+  "spotlight.py": "bbb72d9d3114c78da8ba9657b527c263b6619876fb8b60d0a832286d2d0ca515",
+  "annotations.py": "259d4ba9ea037d78da4862c77f5e2cdd6b6d16bcda2d904d71f54b4b7b6e4053",
   "emergency.py": "dc9f4b242da888a11d993eb0308f8251f2e198d6c5f2ec420046e112fa442c31",
   "screenspotlight.png": "27fffa1b6ae48f61e74a670c566c852e8d5c4768f68de0cb5131f2b3f10d5bba",
-  "plar/runner_screen_spotlight.py": "331ae2433afc768d2a453994e297bb80e77e853fe2a3809f7937acc79549bbfc"
+  "plar/runner_screen_spotlight.py": "9758f9a72b57798c735b9f3ace96eec8dfbd67a11af4586766ac69e795434049",
+  "icons/01 Annotation.png": "0765ac84f9b562cf461d63ef1fd87bd7fef674d0ccd11fb7e348e9b1bf0bc28d",
+  "icons/02 Pen.png": "eb7c72ed1fe9e3718becf39c9b91ea78948c02cd0c56f31a8810d54ead94ebf2",
+  "icons/03 Highlighter.png": "f3144ca44854069eb0f0eb289da2f8358c9bc65951759632747dbb9175ef3870",
+  "icons/04 Arrow.png": "19233e81df48ac754feccb6490d9ca1f6a4a28d5b1e026e52f27103b085f3e3f",
+  "icons/05 Rectangle.png": "66ccfd820e138fbc7aeeabf167b2431f980b9266e44ae792c1d396f6cd4d1b20",
+  "icons/06 Circle.png": "2bd50aee84650917e3491f54b0d08fdeb8f917c882ba81c197a754d7ad70f441",
+  "icons/07 Numbered Marker.png": "041b923f5c0a6c368d631b9919fd848b991fbf99a3569a4ec441343ce6fd337f",
+  "icons/08 Lettered Marker.png": "99b25a263d29583f8a1254298b03152ac5902881df86359e36a0a1d1e494a2df",
+  "icons/09 Eraser.png": "19331f3f8194151fceeb2fdb54ae34f49be3831453c8ac20813d9295b46f7756",
+  "icons/10 Undo.png": "9d4963e3fbbc3d97fa042060c0fbb30e2a69bc56daf2f4ada1fb89a80e5bd125",
+  "icons/11 Redo.png": "776bf799b9a1e41cc3cda6fb22d4e2e4b1fd0951ed6bdc116efb33b61c804e3c",
+  "icons/12 Clear Annotations.png": "476c796047f42d31e05b056e7f93666997e291dade32d9689b9dce9a6f30458a",
+  "icons/13 Mouse Pointer.png": "0b9e6776fbcdcabe2c6fdc515e795724eef6151a79315b08f81282729bd4d505",
+  "icons/14 Hide Toolbar.png": "2ea47557f0003da0de1e5f5f866ebc220b319b1fc0769f81e4440de725260a0d",
+  "icons/15 Capture Screen.png": "e0112d3280da9b5507221436a79ee2217e1b4fd1f8998eea4057f5aec572c7fd",
+  "icons/16 Copy to Clipboard.png": "009e7deab6d52118cc2452257c48c270560c3ce65c8d08bf5b6e64e9b0d85098",
+  "icons/17 Save Image.png": "a2e50cce7664fdd2aaa99b591253d1aaf77ff558f7076284db11d3da4fcdce42",
+  "icons/18 Spotlight.png": "26bc3cb24863a24c7d379d2ae95b596f143e2c1ddd78bbf3985725202a68c397"
 }

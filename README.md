@@ -1,8 +1,20 @@
-# Screen Spotlight 0.1.18
+# Screen Spotlight 0.1.23
+
+Version 0.1.23 displays pen width, highlighter width, and marker size side by side, with shape width beneath them. Icon tooltips describe each action and remain available while the drawing overlay has focus. The blue pointer below Eraser stops drawing and lets clicks reach the underlying application without removing annotations. Pen defaults to 4 pixels and highlighter to 20 pixels; each retains its chosen width during the session.
 
 A standalone Windows desktop tool built with Python and PySide6. Drag a rectangle or circle to keep part of your screen bright while dimming everything around it. Locked overlays stay on top and let mouse clicks reach your applications.
 
-## Run
+## Annotation and capture
+
+The controls window has large Spotlight and Annotation tabs, with bordered Tools, Color, Size and Markers, and Capture sections. Click any drawing tool to start drawing immediately on the spotlight monitor (or the controls' monitor without a spotlight). The controls remain visible, clickable, and movable, so you can switch tools directly; no separate start button is required. The drawing surface excludes the controls window. Tool icons are decoded and cached before display.
+
+Choose one of seven colors and the Normal or Pastel radio option. Pen width, highlighter width, marker size, and shape width remain available together. The next sequence value appears for markers. Tools include pen, translucent highlighter, arrows, rectangles, circles, numbered markers, lettered markers, and an eraser that removes whole objects. Markers use the selected color; the next value sets or resets the sequence, with letters continuing from Z to AA.
+
+Esc or Enter on the drawing surface ends drawing and restores click-through while keeping annotations. The pointer button also activates desktop interaction. Ctrl+Shift+P restores the controls without stopping drawing. Switching to the Spotlight tab ends drawing. Ctrl+Z and Ctrl+Y undo and redo on the drawing surface; the controls also provide undo, redo, and Clear annotations. One shared status shows the current activity or capture result. Spotlight clearing does not delete annotations. Marks stay at screen positions, do not follow scrolling, and are not restored after restart. Starting annotation on a different monitor or changing the display layout clears the previous monitor's marks.
+
+Capture uses Spotlight area / Full monitor radio options. Spotlight area is selected when an area first becomes available; without an area it is disabled and Full monitor is selected. A circular spotlight produces a square crop around the circle, preserving visible dimming in the corners. Captures include annotations and visible spotlight dimming but briefly hide and then restore the controls. After Capture, use Copy to clipboard or Save PNG. Capture depends on normal Windows desktop composition; protected content and exclusive fullscreen applications may not be captured.
+
+## Run the application
 
 Python 3.10 or newer is required when running the source (built and tested here with Python 3.14 and PySide6 6.11.1).
 
@@ -33,7 +45,7 @@ Or double-click `launch.cmd` after installing the dependency.
 
 The initial defaults are rectangle, 50% dimming, and no border in presentation. Dimming uses one row of radio presets: **10, 20, 30, 50, 75, 85, 95, and 100% (solid black)**. The + / minus keys step through these presets. Editable and locked areas both use your chosen dimming, including 100% black. Only drawing a new area is capped at 75% so you can see where to select. You can stay in edit mode indefinitely and adjust dimming live. Shape and dimming are remembered in the current user's Windows settings (`HKEY_CURRENT_USER\Software\SpotHighlight\ScreenSpotlight`). Every launch starts Ready with no active area and no screen dimming. Previously saved areas are ignored. A circle is always round; switching from a rectangle uses the smaller dimension. In edit mode, drag anywhere along the circle edge to resize it around its center. The edge has an invisible grab margin and changes the hover cursor to show the resize direction; no dots or rectangular outline are shown. Drag inside to move, and press Enter to lock the area.
 
-The control panel **minimizes** during selection and presentation and stays in the taskbar and **Alt+Tab**. Restore it with Alt+Tab or **Ctrl+Shift+P**. There are no persistent on-screen instruction banners or control strips; outlines and resize handles are invisible while editing. Hover near any edge to see the resize cursor; rectangle corners resize both dimensions, while sides resize one dimension. **Minimize** keeps the app in the taskbar; there is no Hide to tray option. Closing the control panel or choosing **Quit** exits and removes all overlays. Esc is registered globally only while the spotlight is active. Letter keys and +/− are never captured globally. Hotkey conflicts are reported in the information overlay.
+The control panel temporarily **minimizes** while drawing a new spotlight selection, then returns immediately when the area is selected. It stays visible during editing, presentation, and annotation, and the overlays exclude its bounds so the controls remain clickable. It remains in the taskbar and **Alt+Tab**; restore it with Alt+Tab or **Ctrl+Shift+P**. Outlines and resize handles are invisible while editing. Hover near any edge to see the resize cursor; rectangle corners resize both dimensions, while sides resize one dimension. **Minimize** keeps the app in the taskbar. Closing the control panel or choosing **Quit** exits and removes all overlays. Esc is registered globally while a spotlight or annotation drawing mode is active. Letter keys and +/minus are never captured globally. Hotkey conflicts are reported in the information overlay.
 
 ### Recovery and duplicate instances
 
@@ -92,12 +104,13 @@ Additional Windows checks (these launch application windows and close them autom
 ```powershell
 py tests/native_smoke.py
 py tests/package_smoke.py
+py tests/annotation_native_smoke.py
 ```
 
-Verification covers 25 automated tests, including moving a newly drawn area immediately, minimizing/restoring controls, solid-black rendering, removal of banners, Escape fallback, selection-only timeout, and emergency process exit without a UI event loop. The Windows check moves the real mouse pointer temporarily to verify dragging an existing area, then restores it. It also checks control-panel window flags, shortcut restoration, native click-through at 100% dimming, and hotkey dispatch/cleanup. The package check covers startup/exit and rejection of a second instance. The native check saves `panel-preview.png`. Actual browser clicking/scrolling and physical mixed-DPI setups remain manual checks.
+Verification covers 42 automated tests, including spotlight geometry and input modes, annotation rendering, independently visible size controls, immediate drawing on tab entry, marker sequences and colors, letter entry, equal full-width tabs, undo/redo, erasing, Escape dispatch, monitor removal, capture cropping, persistent controls, and capture radio availability. The Windows spotlight check moves the real mouse pointer temporarily to verify dragging, then restores it. It also checks control-panel window flags, shortcut restoration, native click-through at 100% dimming, and hotkey dispatch/cleanup. The annotation Windows check verifies native hit testing, switching tools with visible controls, annotated capture pixels, exclusion of controls, crop size, panel layout, and real hover tooltips while drawing has focus; it restores the pointer and saves previews of both tabs. The package check covers startup/exit and rejection of a second instance. Actual browser clicking/scrolling and physical mixed-DPI setups remain manual checks.
 
 Manual check: select an area over a browser, click and scroll both inside and outside it, edit and resize, try the global shortcuts while the browser has focus, then clear and quit. Repeat on monitors with different scaling settings.
 
 Implementation references: [Qt window flags and translucency](https://doc.qt.io/qt-6/qt.html), [Windows RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey).
 
-The title bar is exactly `Screen Spotlight`. Version `0.1.18` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Version metadata is defined in `version_info.txt`.
+The title bar is exactly `Screen Spotlight`. Version `0.1.23` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Annotation controls use the supplied PNGs in `icons`. Version metadata is defined in `version_info.txt`.

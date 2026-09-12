@@ -11,6 +11,17 @@ def runner_source():
     source = (ROOT / "spotlight.py").read_text(encoding="utf-8")
     emergency = (ROOT / "emergency.py").read_text(encoding="utf-8")
     source = source.replace("from emergency import EmergencyExit", emergency)
+    annotations = (ROOT / "annotations.py").read_text(encoding="utf-8")
+    icons = {path.name: base64.b64encode(path.read_bytes()).decode("ascii")
+             for path in sorted((ROOT / "icons").glob("*.png"))}
+    annotations = annotations.replace(
+        '    return QPixmap(str(Path(__file__).resolve().parent / "icons" / name))',
+        '    import base64\n'
+        '    pixmap = QPixmap()\n'
+        f'    pixmap.loadFromData(base64.b64decode({icons!r}[name]))\n'
+        '    return pixmap',
+    )
+    source = source.replace("from annotations import AnnotationTools, tool_icon", annotations)
     source = source.replace(
         "def app_icon():\n    return QIcon(str(Path(__file__).resolve().with_name(\"screenspotlight.png\")))",
         "def app_icon():\n"
@@ -34,7 +45,8 @@ def runner_source():
 def main():
     runner = ROOT / "plar/runner_screen_spotlight.py"
     runner.write_text(runner_source(), encoding="utf-8")
-    files = ("spotlight.py", "emergency.py", "screenspotlight.png", "plar/runner_screen_spotlight.py")
+    files = ("spotlight.py", "annotations.py", "emergency.py", "screenspotlight.png", "plar/runner_screen_spotlight.py",
+             *(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "icons").glob("*.png"))))
     hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files}
     (ROOT / "plar/snapshot.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
     print(f"Updated {runner}")
