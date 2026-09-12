@@ -1,0 +1,14 @@
+{
+  "name": "Screen Spotlight",
+  "category": "Utilities",
+  "runner": "\"{python}\" -u \"{script}\"",
+  "script": "C:/beeonedrive/OneDrive - TAL Apparel/B1DOnline/05 B1DTools/obt/projects/utils/spothighlight/plar/runner_screen_spotlight.py",
+  "notes": "Highlight any screen area. Rectangle/circle radio buttons, movable and resizable areas, live 10?100% dimming. Ctrl+Shift+F: new area; Ctrl+Shift+E: edit; Ctrl+Shift+P: controls; Esc: clear. Runs with Python; no ScreenSpotlight.exe required.",
+  "tags": [
+    "spotlight",
+    "screen",
+    "highlight",
+    "presentation"
+  ],
+  "inputs": []
+}
