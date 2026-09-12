@@ -49,6 +49,40 @@ class AnnotationTests(unittest.TestCase):
         for button in self.a.tool_buttons.values():
             self.assertIn(":", button.toolTip())
 
+    def test_slim_numbers_support_buttons_typing_and_bounds(self):
+        self.c.panel.tabs.setCurrentIndex(1)
+        for widget in (self.a.pen_width, self.a.highlighter_width, self.a.size, self.a.shape_width):
+            widget.setValue(widget.minimum())
+            widget.down_arrow.click()
+            self.assertEqual(widget.value(), widget.minimum())
+            widget.up_arrow.click()
+            self.assertEqual(widget.value(), widget.minimum() + 1)
+            widget.lineEdit().setText(str(widget.maximum()))
+            widget.interpretText()
+            widget.up_arrow.click()
+            self.assertEqual(widget.value(), widget.maximum())
+        self.a.set_tool("letter")
+        self.a.sequence.setValue(26)
+        self.a.sequence.up_arrow.click()
+        self.assertEqual(self.a.sequence.text(), "AA")
+
+    def test_fast_color_switch_and_palette_animation_end_at_current_selection(self):
+        self.c.panel.tabs.setCurrentIndex(1)
+        self.app.processEvents()
+        for index in (2, 4, 6):
+            self.a.swatches.button(index).click()
+            self.assertEqual(self.a.color, index)
+        track = self.a.swatch_track
+        track.slide.setCurrentTime(track.slide.duration())
+        expected = QRectF(self.a.swatches.button(6).geometry()).adjusted(-1, -1, 1, 1)
+        self.assertEqual(track.outline, expected)
+        self.a.variant.button(1).click()
+        for i, button in enumerate(self.a.swatches.buttons()):
+            button.fade.setCurrentTime(button.fade.duration())
+            self.assertEqual(button.color, QColor(PALETTES[1][i]))
+        self.assertEqual(self.a.swatches.checkedId(), 6)
+        self.assertEqual(self.a.swatches.button(6).accessibleName(), "Purple")
+
     def test_sequence_labels(self):
         self.assertEqual([marker_label(n, True) for n in (1, 26, 27, 52, 53, 702, 703)],
                          ["A", "Z", "AA", "AZ", "BA", "ZZ", "AAA"])

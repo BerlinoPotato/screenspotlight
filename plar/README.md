@@ -1,6 +1,6 @@
 # Screen Spotlight for PLAR
 
-This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.23 displays pen width, highlighter width, and marker size together and enables descriptive icon tooltips even while drawing has focus. Controls remain available for editing, presentation, and annotation.
+This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.31 reduces all light-gray section-card corner radii from 20 to 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
 
 ## In PLAR
 

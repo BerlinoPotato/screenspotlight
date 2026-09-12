@@ -167,13 +167,14 @@ class AppTests(unittest.TestCase):
         self.assertEqual(rectangle_hit(rect, QPointF(200, 200)), ("move", Qt.CursorShape.SizeAllCursor))
         self.assertEqual(rectangle_hit(rect, QPointF(50, 50)), (None, Qt.CursorShape.ArrowCursor))
 
-    def test_dimming_radio_presets_and_keyboard(self):
+    def test_dimming_presets_and_keyboard(self):
         self.seed()
         self.c.edit()
         self.assertEqual(tuple(self.c.panel.dim_buttons), DIM_PRESETS)
         for value, button in self.c.panel.dim_buttons.items():
             button.click()
             self.assertEqual(self.c.dim, value)
+            self.assertEqual(self.c.panel.dim_slider.value(), value)
             self.assertEqual(sum(b.isChecked() for b in self.c.panel.dim_buttons.values()), 1)
         QTest.keyClick(self.o, Qt.Key.Key_Minus)
         self.assertEqual(self.c.dim, 95)
@@ -181,6 +182,22 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.c.dim, 100)
         QTest.keyClick(self.o, Qt.Key.Key_Plus)
         self.assertEqual(self.c.dim, 100)
+
+    def test_slider_intermediate_value_renders_and_keyboard_steps_to_presets(self):
+        self.seed()
+        self.c.edit()
+        self.c.panel.dim_slider.setValue(43)
+        self.assertEqual(self.c.dim, 43)
+        self.assertEqual(self.c.panel.dim_label.text(), '43')
+        self.assertFalse(any(b.isChecked() for b in self.c.panel.dim_buttons.values()))
+        self.assertAlmostEqual(self.render_overlay().pixelColor(20, 100).alpha(), 110, delta=1)
+        QTest.keyClick(self.o, Qt.Key.Key_Plus)
+        self.assertEqual(self.c.dim, 50)
+        self.assertEqual(self.c.panel.dim_slider.value(), 50)
+        self.c.panel.dim_slider.setValue(43)
+        QTest.keyClick(self.o, Qt.Key.Key_Minus)
+        self.assertEqual(self.c.dim, 30)
+        self.assertTrue(self.c.panel.dim_buttons[30].isChecked())
 
     def test_restart_keeps_settings_without_restoring_area(self):
         with tempfile.TemporaryDirectory() as directory:

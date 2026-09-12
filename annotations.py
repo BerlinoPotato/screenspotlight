@@ -4,7 +4,7 @@ from functools import lru_cache
 from math import atan2, cos, sin, pi
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QEasingCurve, QVariantAnimation
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRegion, QValidator
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGridLayout, QGroupBox,
@@ -13,10 +13,133 @@ from PySide6.QtWidgets import (
 
 
 PALETTES = (
-    ("#e53935", "#f58220", "#ffdc32", "#28b463", "#00bcd4", "#3265e8", "#d92caf"),
-    ("#f5a6a3", "#ffc49a", "#fff0a3", "#a5dfb5", "#a0e4ec", "#afc4fa", "#efa9db"),
+    ("#e53935", "#f58220", "#ffdc32", "#28b463", "#00bcd4", "#3265e8", "#a980ed"),
+    ("#f5a6a3", "#ffc49a", "#fff0a3", "#a5dfb5", "#a0e4ec", "#afc4fa", "#c8aff5"),
 )
-COLOR_NAMES = ("Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Magenta")
+COLOR_NAMES = ("Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple")
+
+
+class ThinArrow(QPushButton):
+    def __init__(self, up, parent):
+        super().__init__(parent)
+        self.up = up
+        self.setAccessibleName("Increase" if up else "Decrease")
+        self.setAutoRepeat(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(24, 18)
+        self.setStyleSheet("background: transparent; border: none; padding: 0;")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = "#454551" if self.underMouse() or self.hasFocus() else "#858894"
+        painter.setPen(QPen(QColor(color), 1.1, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        x, y = self.width() / 2, self.height() / 2
+        sign = -1 if self.up else 1
+        path = QPainterPath(QPointF(x - 4, y - sign * 2))
+        path.lineTo(x, y + sign * 2)
+        path.lineTo(x + 4, y - sign * 2)
+        painter.drawPath(path)
+
+
+class SlimSpinBox(QSpinBox):
+    """Editable number with real repeatable buttons and lightweight chevrons."""
+    def __init__(self):
+        super().__init__()
+        self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedSize(112, 38)
+        self.setStyleSheet("QSpinBox { background: transparent; border: none; padding: 0 24px; font-size: 22px; color: #454551; } QSpinBox:focus { border: none; } QLineEdit { background: transparent; selection-background-color: #eef0f4; selection-color: #454551; }")
+        self.up_arrow = ThinArrow(True, self)
+        self.down_arrow = ThinArrow(False, self)
+        self.up_arrow.clicked.connect(self.stepUp)
+        self.down_arrow.clicked.connect(self.stepDown)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.up_arrow.move(self.width() - 24, 1)
+        self.down_arrow.move(self.width() - 24, 19)
+
+
+class ColorSwatch(QPushButton):
+    def __init__(self):
+        super().__init__()
+        self.color = QColor("white")
+        self.setFixedSize(34, 34)
+        self.setCheckable(True)
+        self.fade = QVariantAnimation(self)
+        self.fade.setDuration(180)
+        self.fade.valueChanged.connect(self.set_display_color)
+
+    def set_display_color(self, color):
+        self.color = color
+        self.update()
+
+    def set_color(self, color):
+        self.fade.stop()
+        self.fade.setStartValue(self.color)
+        self.fade.setEndValue(QColor(color))
+        if self.isVisible():
+            self.fade.start()
+        else:
+            self.set_display_color(QColor(color))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(self.color)
+        painter.setPen(QPen(QColor("white"), 1.5))
+        painter.drawEllipse(QRectF(self.rect()).adjusted(2, 2, -2, -2))
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("white"), 1))
+            painter.drawEllipse(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5))
+
+
+class SwatchTrack(QWidget):
+    """A selection outline that slides without changing when the color takes effect."""
+    def __init__(self, group):
+        super().__init__()
+        self.group = group
+        self.outline = QRectF()
+        self.slide = QVariantAnimation(self)
+        self.slide.setDuration(190)
+        self.slide.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.slide.valueChanged.connect(self.set_outline)
+        group.idToggled.connect(lambda index, checked: self.retarget() if checked else None)
+
+    def set_outline(self, rect):
+        self.outline = rect
+        self.update()
+
+    def retarget(self, animate=True):
+        button = self.group.checkedButton()
+        if button is None:
+            return
+        target = QRectF(button.geometry()).adjusted(-1, -1, 1, 1)
+        self.slide.stop()
+        if animate and self.isVisible() and not self.outline.isEmpty():
+            self.slide.setStartValue(self.outline)
+            self.slide.setEndValue(target)
+            self.slide.start()
+        else:
+            self.set_outline(target)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: self.retarget(False))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, lambda: self.retarget(False))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("white"))
+        painter.drawEllipse(self.outline)
 
 
 def load_tool_pixmap(name):
@@ -43,7 +166,7 @@ def marker_label(number, letters=False):
     return label
 
 
-class MarkerSequence(QSpinBox):
+class MarkerSequence(SlimSpinBox):
     def __init__(self):
         self.letters = False
         super().__init__()
@@ -296,7 +419,7 @@ class AnnotationTools(QWidget):
         self.overlay = InkOverlay(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         tools_box = QGroupBox("Tools")
         tools_layout = QVBoxLayout(tools_box)
         layout.addWidget(tools_box)
@@ -327,21 +450,27 @@ class AnnotationTools(QWidget):
         color_box = QGroupBox("Color")
         color_layout = QVBoxLayout(color_box)
         layout.addWidget(color_box)
-        row = QHBoxLayout()
+        self.variant_control = QWidget()
+        self.variant_control.setObjectName("segmentedChoices")
+        row = QHBoxLayout(self.variant_control)
+        row.setContentsMargins(3, 3, 3, 3)
+        row.setSpacing(2)
         self.variant = QButtonGroup(self)
         for i, name in enumerate(("Normal", "Pastel")):
-            button = QRadioButton(name)
+            button = QPushButton(name)
+            button.setCheckable(True)
+            button.setObjectName("segmentChoice")
             self.variant.addButton(button, i)
             button.setChecked(i == 0)
             row.addWidget(button)
-        row.addStretch()
         self.variant.idClicked.connect(self.refresh_colors)
-        color_layout.addLayout(row)
-        row = QHBoxLayout()
+        color_layout.addWidget(self.variant_control)
         self.swatches = QButtonGroup(self)
+        self.swatch_track = SwatchTrack(self.swatches)
+        row = QHBoxLayout(self.swatch_track)
+        row.setContentsMargins(4, 4, 4, 4)
         for i, name in enumerate(COLOR_NAMES):
-            button = QPushButton()
-            button.setFixedSize(42, 36)
+            button = ColorSwatch()
             button.setToolTip(name)
             button.setAccessibleName(name)
             button.setCheckable(True)
@@ -349,7 +478,7 @@ class AnnotationTools(QWidget):
             self.swatches.addButton(button, i)
             row.addWidget(button)
         self.swatches.idClicked.connect(self.set_color)
-        color_layout.addLayout(row)
+        color_layout.addWidget(self.swatch_track)
         self.refresh_colors()
         settings_box = QGroupBox("Size and Markers")
         settings_layout = QVBoxLayout(settings_box)
@@ -357,46 +486,71 @@ class AnnotationTools(QWidget):
         self.settings_row = QWidget()
         row = QGridLayout(self.settings_row)
         row.setContentsMargins(0, 0, 0, 0)
-        self.pen_width = QSpinBox()
-        self.highlighter_width = QSpinBox()
-        self.shape_width = QSpinBox()
+        self.pen_width = SlimSpinBox()
+        self.highlighter_width = SlimSpinBox()
+        self.shape_width = SlimSpinBox()
         for widget, value in ((self.pen_width, 4), (self.highlighter_width, 20), (self.shape_width, 4)):
             widget.setRange(1, 40)
             widget.setValue(value)
-        self.size = QSpinBox()
+        self.size = SlimSpinBox()
         self.size.setRange(20, 120)
         self.size.setValue(40)
         self.sequence = MarkerSequence()
         self.sequence.setRange(1, 999999)
         self.sequence_label = QLabel("Next")
-        for column, (label, widget) in enumerate((("Pen width", self.pen_width), ("Highlighter width", self.highlighter_width), ("Marker size", self.size))):
-            row.addWidget(QLabel(label), 0, column)
-            row.addWidget(widget, 1, column)
-            row.setColumnStretch(column, 1)
+        for index, (label, widget) in enumerate((("Pen width", self.pen_width),
+                                                ("Highlighter width", self.highlighter_width),
+                                                ("Marker size", self.size), ("Shape width", self.shape_width))):
+            cell = QVBoxLayout()
+            cell.setSpacing(0)
+            caption = QLabel(label)
+            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            widget.setAccessibleName(label)
+            cell.addWidget(caption)
+            cell.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
+            row.addLayout(cell, index // 2, index % 2)
+        row.setColumnStretch(0, 1)
+        row.setColumnStretch(1, 1)
+        row.setVerticalSpacing(8)
+        self.sequence_divider = QWidget()
+        self.sequence_divider.setFixedHeight(13)
+        divider_layout = QHBoxLayout(self.sequence_divider)
+        divider_layout.setContentsMargins(0, 6, 0, 6)
+        divider_layout.setSpacing(0)
+        divider_layout.addStretch(1)
+        divider_line = QWidget()
+        divider_line.setFixedHeight(1)
+        divider_line.setStyleSheet("background: #cdd2dc; border: none;")
+        divider_layout.addWidget(divider_line, 4)
+        divider_layout.addStretch(1)
+        row.addWidget(self.sequence_divider, 2, 0, 1, 2)
         extra = QHBoxLayout()
-        extra.addWidget(QLabel("Shape width"))
-        extra.addWidget(self.shape_width)
         extra.addStretch()
         extra.addWidget(self.sequence_label)
         extra.addWidget(self.sequence)
-        row.addLayout(extra, 2, 0, 1, 3)
-        self.settings_row.setMinimumHeight(76)
+        extra.addStretch()
+        row.addLayout(extra, 3, 0, 1, 2)
         settings_layout.addWidget(self.settings_row)
         self.update_settings()
         capture_box = QGroupBox("Capture")
         capture_layout = QVBoxLayout(capture_box)
         layout.addWidget(capture_box)
-        row = QHBoxLayout()
+        self.capture_control = QWidget()
+        self.capture_control.setObjectName("segmentedChoices")
+        row = QHBoxLayout(self.capture_control)
+        row.setContentsMargins(3, 3, 3, 3)
+        row.setSpacing(2)
         self.capture_scope = QButtonGroup(self)
         self.had_selection = False
         for i, name in enumerate(("Spotlight area", "Full monitor")):
-            button = QRadioButton(name)
+            button = QPushButton(name)
+            button.setCheckable(True)
+            button.setObjectName("segmentChoice")
             self.capture_scope.addButton(button, i)
             button.setChecked(i == 1)
             button.setEnabled(i == 1)
             row.addWidget(button)
-        row.addStretch()
-        capture_layout.addLayout(row)
+        capture_layout.addWidget(self.capture_control)
         row = QHBoxLayout()
         row.addWidget(self.button("Capture screen", "15 Capture Screen.png", self.capture))
         self.copy_button = self.button("Copy to clipboard", "16 Copy to Clipboard.png", self.copy)
@@ -407,15 +561,18 @@ class AnnotationTools(QWidget):
         row.addWidget(self.save_button)
         capture_layout.addLayout(row)
         for section_layout in (tools_layout, color_layout, settings_layout, capture_layout):
-            section_layout.setContentsMargins(8, 4, 8, 4)
+            section_layout.setContentsMargins(14, 6, 14, 8)
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
     def button(self, label, filename, action):
         button = IconButton()
-        button.setIcon(tool_icon(filename))
-        button.setIconSize(QSize(32, 32))
-        button.setFixedHeight(48)
+        if label in ("Capture screen", "Copy to clipboard", "Save PNG"):
+            button.setText({"Capture screen": "Capture", "Copy to clipboard": "Copy", "Save PNG": "Save PNG"}[label])
+        else:
+            button.setIcon(tool_icon(filename))
+        button.setIconSize(QSize(27, 27))
+        button.setFixedHeight(38)
         button.setMinimumWidth(52)
         descriptions = {
             "Pen": "Pen: draw freehand strokes",
@@ -437,7 +594,7 @@ class AnnotationTools(QWidget):
         button.setToolTip(descriptions.get(label, label))
         button.setAccessibleName(label)
         button.clicked.connect(action)
-        button.setStyleSheet("QPushButton:checked { border: 2px solid #71d6ff; background: #364961; }")
+
         return button
 
     def set_tool(self, tool):
@@ -456,7 +613,7 @@ class AnnotationTools(QWidget):
 
     def update_settings(self):
         marker = self.tool in ("number", "letter")
-        for widget in (self.sequence, self.sequence_label):
+        for widget in (self.sequence, self.sequence_label, self.sequence_divider):
             widget.setVisible(marker)
         self.sequence_label.setText("Next letter" if self.tool == "letter" else "Next number")
         self.sequence.set_letters(self.tool == "letter")
@@ -476,7 +633,7 @@ class AnnotationTools(QWidget):
 
     def refresh_colors(self, *_):
         for i, button in enumerate(self.swatches.buttons()):
-            button.setStyleSheet(f"QPushButton {{background: {PALETTES[self.variant.checkedId()][i]}; border: 2px solid #555; padding: 0;}} QPushButton:checked {{border: 4px solid white;}}")
+            button.set_color(PALETTES[self.variant.checkedId()][i])
 
     def remember(self):
         self.history.append((list(self.marks), self.sequence.value()))

@@ -1,8 +1,6 @@
 __pycache__/
-*.py[cod]
 .venv/
 build/
+dist/
+*.spec
 *.log
-panel-preview.png
-information-preview.png
-/dist/ScreenSpotlight/_internal

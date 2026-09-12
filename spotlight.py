@@ -12,17 +12,17 @@ from emergency import EmergencyExit
 from annotations import AnnotationTools, tool_icon
 
 from PySide6.QtCore import (
-    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, Qt, QTimer,
+    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, Qt, QTimer, QVariantAnimation, QEasingCurve,
 )
-from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QRegion
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QRegion, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton,
-    QDialog, QGroupBox, QMessageBox, QSystemTrayIcon, QTabWidget, QVBoxLayout, QWidget,
+    QDialog, QGraphicsDropShadowEffect, QGroupBox, QMessageBox, QSystemTrayIcon, QSlider, QSizePolicy, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.23"
+APP_VERSION = "0.1.31"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -297,7 +297,82 @@ class Overlay(QWidget):
             super().keyPressEvent(event)
 
 
+class SlidingTabBar(QTabBar):
+    def __init__(self):
+        super().__init__()
+        self.pill = QRectF()
+        self.slide = QVariantAnimation(self)
+        self.slide.setDuration(190)
+        self.slide.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.slide.valueChanged.connect(self.set_pill)
+        self.currentChanged.connect(self.move_pill)
+
+    def set_pill(self, rect):
+        self.pill = rect
+        self.update()
+
+    def move_pill(self, index):
+        self.slide.stop()
+        target = QRectF(self.tabRect(index)).adjusted(4, 4, -4, -4)
+        if self.isVisible() and not self.pill.isEmpty():
+            self.slide.setStartValue(self.pill)
+            self.slide.setEndValue(target)
+            self.slide.start()
+        else:
+            self.set_pill(target)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.slide.stop()
+        self.set_pill(QRectF(self.tabRect(self.currentIndex())).adjusted(4, 4, -4, -4))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#e5e8ee"))
+        painter.drawRoundedRect(QRectF(self.rect()), 22, 22)
+        painter.setBrush(QColor("white"))
+        painter.drawRoundedRect(self.pill, 18, 18)
+        for index in range(self.count()):
+            painter.setPen(QColor("#535764" if index == self.currentIndex() else "#7b7f8a"))
+            painter.drawText(self.tabRect(index), Qt.AlignmentFlag.AlignCenter, self.tabText(index))
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#8b91a3"), 1))
+            painter.drawRoundedRect(self.pill.adjusted(1, 1, -1, -1), 17, 17)
+
+
+def information_icon():
+    pixmap = QPixmap(48, 48)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#747987"), 2.2))
+    painter.drawEllipse(QRectF(7, 7, 34, 34))
+    painter.setBrush(QColor("#747987"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(QRectF(22, 15, 4, 4))
+    painter.drawRoundedRect(QRectF(22.5, 22, 3, 11), 1.5, 1.5)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class FullWidthTabs(QTabWidget):
+    def __init__(self):
+        super().__init__()
+        self.setTabBar(SlidingTabBar())
+
+    def sizeHint(self):
+        page = self.currentWidget()
+        if page is None:
+            return super().sizeHint()
+        size = page.sizeHint()
+        return QSize(size.width(), size.height() + self.tabBar().sizeHint().height() + 8)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.tabBar().setFixedWidth(self.width())
@@ -311,16 +386,19 @@ class Panel(QWidget):
         self.setWindowTitle(WINDOW_TITLE)
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setMinimumWidth(390)
+        self.setMinimumWidth(440)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         title = QLabel("Screen Spotlight")
-        title.setStyleSheet("font-size: 25px; font-weight: 650;")
+        title.setStyleSheet("font-size: 19px; font-weight: 500;")
         header = QHBoxLayout()
         header.addWidget(title)
         header.addStretch()
         self.info_button = QPushButton("ⓘ")
+        self.info_button.setText("")
+        self.info_button.setIcon(information_icon())
+        self.info_button.setIconSize(QSize(26, 26))
         self.info_button.setAccessibleName("Information and keyboard shortcuts")
         self.info_button.setToolTip("Information and keyboard shortcuts")
         self.info_button.setFixedSize(36, 36)
@@ -329,15 +407,15 @@ class Panel(QWidget):
         layout.addLayout(header)
         outer_layout = layout
         self.tabs = FullWidthTabs()
-        self.tabs.setIconSize(QSize(44, 44))
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         spotlight_tab = QWidget()
         layout = QVBoxLayout(spotlight_tab)
         layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         spotlight_layout = layout
-        self.tabs.addTab(spotlight_tab, tool_icon("18 Spotlight.png"), "Spotlight")
+        self.tabs.addTab(spotlight_tab, "Spotlight")
         controller.annotations = AnnotationTools(controller)
-        self.tabs.addTab(controller.annotations, tool_icon("01 Annotation.png"), "Annotation")
+        self.tabs.addTab(controller.annotations, "Annotation")
         self.tabs.setTabToolTip(0, "Spotlight: select an area and dim its surroundings")
         self.tabs.setTabToolTip(1, "Annotation: start drawing with the selected tool")
         outer_layout.addWidget(self.tabs)
@@ -347,7 +425,10 @@ class Panel(QWidget):
         self.shape_buttons = {}
         shape_row = QHBoxLayout(shape_box)
         for name in ("Rectangle", "Circle"):
-            button = QRadioButton(name)
+            button = QPushButton(name)
+            button.setCheckable(True)
+            button.setObjectName("rectangleChoice" if name == "Rectangle" else "circleChoice")
+            button.setFixedHeight(42)
             self.shape_group.addButton(button)
             self.shape_buttons[name] = button
             button.setChecked(name == controller.shape)
@@ -355,24 +436,52 @@ class Panel(QWidget):
         self.shape_group.buttonClicked.connect(lambda button: controller.set_shape(button.text()))
         dim_box = QGroupBox("Background dimming")
         layout.addWidget(dim_box)
-        self.dim_label = QLabel()
+        dim_layout = QVBoxLayout(dim_box)
+        self.dim_label = QLabel(str(controller.dim))
+        self.dim_label.setObjectName("dimValue")
+        self.dim_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        value_row = QHBoxLayout()
+        value_row.setSpacing(0)
+        value_row.addWidget(self.dim_label)
+        self.dim_percent = QLabel("%")
+        self.dim_percent.setStyleSheet("font-size: 14px; color: #868b97; padding-bottom: 4px;")
+        value_row.addWidget(self.dim_percent, alignment=Qt.AlignmentFlag.AlignBottom)
+        value_row.addStretch()
+        dim_layout.addLayout(value_row)
+        self.dim_slider = QSlider(Qt.Orientation.Horizontal)
+        self.dim_slider.setRange(10, 100)
+        self.dim_slider.setValue(controller.dim)
+        self.dim_slider.setAccessibleName("Background dimming percentage")
+        self.dim_slider.valueChanged.connect(controller.set_dim)
+        dim_layout.addWidget(self.dim_slider)
+        ends = QHBoxLayout()
+        for text in ("Subtle", "Full focus"):
+            label = QLabel(text)
+            label.setObjectName("rangeCaption")
+            if text == "Full focus":
+                label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            ends.addWidget(label)
+        dim_layout.addLayout(ends)
         self.dim_group = QButtonGroup(self)
         self.dim_buttons = {}
-        dim_row = QHBoxLayout(dim_box)
-        dim_row.setSpacing(12)
+        dim_row = QHBoxLayout()
+        dim_row.setSpacing(5)
+        dim_layout.addLayout(dim_row)
         for value in DIM_PRESETS:
-            button = QRadioButton(f"{value}%")
+            button = QPushButton(f"{value}%")
+            button.setCheckable(True)
+            button.setObjectName("dimPreset")
             self.dim_group.addButton(button, value)
             self.dim_buttons[value] = button
             button.setChecked(value == controller.dim)
             dim_row.addWidget(button)
         self.dim_group.idClicked.connect(controller.set_dim)
-        self.dim_label.setText("Background dimming")
-        area_box = QGroupBox("Area")
+        area_box = QGroupBox("Your spotlight")
         layout.addWidget(area_box)
         layout = QVBoxLayout(area_box)
         select = QPushButton("Select area")
         select.setObjectName("primary")
+        select.setFixedHeight(42)
         select.clicked.connect(controller.select)
         layout.addWidget(select)
         row = QHBoxLayout()
@@ -381,9 +490,9 @@ class Panel(QWidget):
             button.clicked.connect(action)
             row.addWidget(button)
         layout.addLayout(row)
-        for section_layout in (shape_row, dim_row, layout):
-            section_layout.setContentsMargins(8, 12, 8, 12)
-        spotlight_layout.addStretch()
+        for section_layout in (shape_row, dim_layout, layout):
+            section_layout.setContentsMargins(16, 12, 16, 14)
+
         layout = outer_layout
         self.status = controller.annotations.status
         self.status.setText("Ready — select an area to begin.")
@@ -421,7 +530,7 @@ class Panel(QWidget):
         info_layout.addWidget(help_text)
         self.warning = QLabel()
         self.warning.setWordWrap(True)
-        self.warning.setStyleSheet("color: #ffcc80;")
+        self.warning.setStyleSheet("color: #8a4c16;")
         info_layout.addWidget(self.warning)
         dismiss = QPushButton("Close")
         dismiss.clicked.connect(self.information.accept)
@@ -436,32 +545,95 @@ class Panel(QWidget):
         layout.addLayout(row)
         self.version_label = QLabel(APP_VERSION)
         self.version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.version_label.setStyleSheet("color: #a9b9ce; font-size: 12px;")
+        self.version_label.setStyleSheet("color: #707684; font-size: 12px;")
         layout.addWidget(self.version_label)
+        self.setObjectName("porcelainPanel")
+        self.status.setObjectName("activityStatus")
+        self.info_button.setObjectName("informationButton")
         self.setStyleSheet("""
-            QWidget { background: #101b2b; color: #edf4fc; font-family: 'Segoe UI'; font-size: 14px; }
-            QPushButton { background: #213149; border: 1px solid #364961; border-radius: 7px; padding: 10px; }
+            QWidget { color: #454551; font-family: 'Segoe UI'; font-size: 13px; }
+            QWidget#porcelainPanel, QDialog { background: #ffffff; }
+            QLabel, QRadioButton { background: transparent; }
+            QPushButton { background: #ffffff; color: #737783; font-size: 12px; border: 1px solid #d8dce4;
+                          border-radius: 17px; padding: 9px 12px; }
+            QPushButton:hover { background: #edf0f5; border-color: #b6bfce; }
+            QPushButton:pressed { background: #dfe4ed; }
+            QPushButton[checkable="true"] { background: #e5e8ee; border: 1px solid transparent; }
+            QPushButton:checked { background: #ffffff; color: #535764; border: 1px solid transparent; }
+            QPushButton:checked:hover { background: #ffffff; }
+            QWidget#segmentedChoices { background: #e5e8ee; border-radius: 17px; }
+            QPushButton#segmentChoice { background: transparent; border: 1px solid transparent;
+                                        border-radius: 14px; padding: 6px 10px; font-size: 11px; }
+            QPushButton#segmentChoice:checked { background: #ffffff; color: #535764; }
+            QPushButton#segmentChoice:disabled { background: transparent; color: #9a9fab; }
+            QPushButton:focus { border: 1px dotted #a5adbd; }
+            QPushButton[checkable="true"]:focus { border: 1px solid #ffffff; }
+            QSpinBox:focus { border: none; }
+            QPushButton#primary { background: #4f5463; color: #ffffff; font-weight: 600;
+                                 border: 1px solid #4f5463; border-radius: 20px; }
+            QPushButton#primary:hover { background: #3f4452; }
+            QPushButton#primary:pressed { background: #303542; }
+            QPushButton#primary:focus { border: 2px solid #adb9d2; }
+            QPushButton#informationButton { border: none; background: transparent; padding: 0; }
+            QPushButton:disabled { background: #f3f4f6; color: #9197a3; border-color: #e5e7ec; }
             QRadioButton { padding: 8px 0; spacing: 8px; }
-            QRadioButton::indicator { width: 16px; height: 16px; border: 2px solid #a9b9ce; border-radius: 9px; background: #101b2b; }
-            QRadioButton::indicator:checked { background: #71d6ff; border-color: #71d6ff; }
-            QPushButton:hover { background: #2d4462; }
-            QPushButton#primary { background: #71d6ff; color: #102235; font-weight: bold; border: none; }
-            QPushButton:disabled { color: #67768b; }
-            QTabWidget::pane { border: none; }
-            QTabBar::tab { background: #213149; color: #edf4fc; padding: 9px 16px; border-bottom: 2px solid transparent; }
-            QTabBar::tab:selected { background: #2d4462; border-bottom-color: #71d6ff; }
-            QTabBar::tab { font-size: 20px; }
-            QGroupBox { font-size: 17px; border: 1px solid #526278; border-radius: 6px; margin-top: 14px; padding: 4px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #bed3e6; }
+            QRadioButton::indicator { width: 14px; height: 14px; border: 2px solid #a1a8b6;
+                                     border-radius: 9px; background: #ffffff; }
+            QRadioButton::indicator:checked { background: #697186; border-color: #697186; }
+            QRadioButton::indicator:hover { border-color: #454b5b; }
+            QRadioButton:focus { color: #303542; text-decoration: underline; }
+            QRadioButton:disabled { color: #9197a3; }
+            QRadioButton::indicator:disabled { background: #eef0f4; border-color: #d8dce4; }
+            QTabWidget::pane { border: none; background: #ffffff; }
+            QTabBar { background: #f0f1f4; border-radius: 22px; }
+            QTabBar::tab { background: transparent; color: #707684; padding: 11px 16px;
+                           border: 3px solid #f0f1f4; border-radius: 22px; font-size: 13px; }
+            QTabBar::tab:selected { background: #ffffff; color: #454551; }
+            QTabBar::tab:hover { color: #303542; background: #e9ecf2; }
+            QGroupBox { background: #eef0f4; font-size: 12px; font-weight: 700;
+                        border: 1px solid #e9ecf1; border-radius: 12px; margin-top: 0; padding-top: 24px; }
+            QGroupBox::title { subcontrol-origin: border; subcontrol-position: top left;
+                              top: 10px; left: 17px; color: #555d70; }
+            QPushButton#rectangleChoice { border-radius: 6px; background: #e5e8ee; }
+            QPushButton#circleChoice { border-radius: 21px; background: #e5e8ee; }
+            QPushButton#rectangleChoice:checked, QPushButton#circleChoice:checked { background: #ffffff; color: #535764; border: 1px solid transparent; }
+            QPushButton#dimPreset { background: #e0e4ec; border: 1px solid transparent;
+                                   border-radius: 12px; padding: 5px 2px; font-size: 11px; }
+            QPushButton#dimPreset:checked { background: #ffffff; border-color: transparent; color: #535764; }
+            QPushButton#dimPreset:focus { border-color: #697186; }
+            QLabel#dimValue { font-size: 30px; font-weight: 400; }
+            QLabel#rangeCaption { color: #707684; font-size: 11px; }
+            QSlider { background: transparent; min-height: 24px; }
+            QSlider::groove:horizontal { height: 5px; background: #dfe3eb; border-radius: 2px; }
+            QSlider::sub-page:horizontal { background: #697186; border-radius: 2px; }
+            QSlider::handle:horizontal { background: #697186; width: 14px; margin: -5px 0;
+                                        border-radius: 7px; }
+            QSlider::handle:horizontal:focus { background: #454b5b; }
             QGroupBox QRadioButton { padding: 2px 0; }
-            QToolTip { background: #f4f7fb; color: #142033; border: 1px solid #6a7b90; padding: 6px; }
+            QSpinBox { background: #ffffff; color: #454551; border: 1px solid #d8dce4;
+                       border-radius: 12px; padding: 4px 8px; min-height: 20px;
+                       selection-background-color: #eef0f4; selection-color: #454551; }
+            QLabel#activityStatus { background: #f0f1f4; color: #626a7c;
+                                    border-radius: 14px; padding: 8px 10px; font-size: 11px; }
+            QToolTip { background: #ffffff; color: #454551; border: 1px solid #c5cbd6; padding: 6px; }
         """)
+        # Keep elevation inside the controls; screen overlays retain their exact geometry.
+        for section in self.findChildren(QGroupBox):
+            shadow = QGraphicsDropShadowEffect(section)
+            shadow.setBlurRadius(12)
+            shadow.setOffset(0, 3)
+            shadow.setColor(QColor(63, 72, 91, 16))
+            section.setGraphicsEffect(shadow)
         for button in self.dim_buttons.values():
             button.ensurePolished()
             button.setMinimumWidth(button.sizeHint().width())
         self.tabs.currentChanged.connect(self.tab_changed)
+        self.resize(self.minimumWidth(), self.sizeHint().height())
 
     def tab_changed(self, index):
+        self.tabs.updateGeometry()
+        self.layout().activate()
+        self.resize(self.width(), self.sizeHint().height())
         annotations = self.controller.annotations
         annotations.sync_capture_scope()
         if index == 0:
@@ -499,7 +671,6 @@ class Spotlight:
             self.dim = max(10, min(100, int(self.settings.value("dim", 50)))) if self.settings else 50
         except (ValueError, TypeError):
             self.dim = 50
-        self.dim = min(DIM_PRESETS, key=lambda value: abs(value - self.dim))
         self.mode = "off"
         self.escape_held = False
         self.focus = QRectF()
@@ -598,14 +769,24 @@ class Spotlight:
         self.repaint()
 
     def set_dim(self, value):
-        self.dim = min(DIM_PRESETS, key=lambda preset: abs(preset - value))
-        self.panel.dim_buttons[self.dim].setChecked(True)
-        self.panel.dim_label.setText("Background dimming")
+        self.dim = max(10, min(100, int(value)))
+        panel = self.panel
+        panel.dim_slider.blockSignals(True)
+        panel.dim_slider.setValue(self.dim)
+        panel.dim_slider.blockSignals(False)
+        panel.dim_group.setExclusive(False)
+        for preset, button in panel.dim_buttons.items():
+            button.setChecked(preset == self.dim)
+        panel.dim_group.setExclusive(True)
+        panel.dim_label.setText(str(self.dim))
         self.repaint()
 
     def step_dim(self, direction):
-        index = max(0, min(len(DIM_PRESETS) - 1, DIM_PRESETS.index(self.dim) + direction))
-        self.set_dim(DIM_PRESETS[index])
+        if direction > 0:
+            value = next((preset for preset in DIM_PRESETS if preset > self.dim), 100)
+        else:
+            value = next((preset for preset in reversed(DIM_PRESETS) if preset < self.dim), 10)
+        self.set_dim(value)
 
     def poll_escape(self):
         # Independent of focus, RegisterHotKey success, and native event delivery.
