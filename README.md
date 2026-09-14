@@ -1,6 +1,6 @@
-# Screen Spotlight 0.1.31
+# Screen Spotlight 0.1.32
 
-Version 0.1.31 reduces the corner radius of the light-gray section cards from 20 to 12 logical pixels. This applies to Highlight shape, Background dimming, Your spotlight, Tools, Color, Size and Markers, and Capture. Tabs and compact choices retain their existing radii. The marker sequence divider remains centered at two-thirds width.
+Version 0.1.32 packages the Windows application as one portable executable. Copy `dist\ScreenSpotlight.exe` to any folder and run it without Python or an accompanying `_internal` folder. Dependencies unpack automatically into a temporary folder at startup, which can make launching slightly slower.
 
 The desktop application displays pen width and highlighter width in the first row, with marker size and shape width in the second row. Tooltips describe each action and remain available while the drawing overlay has focus. The Pointer button below Eraser stops drawing and lets clicks reach the underlying application without removing annotations. Pen defaults to 4 pixels and highlighter to 20 pixels; each retains its chosen width during the session.
 
@@ -72,7 +72,7 @@ py -m pip install -r requirements-build.txt
 py -m PyInstaller --noconfirm --clean ScreenSpotlight.spec
 ```
 
-Or double-click `build.cmd`. Launch `dist\ScreenSpotlight\ScreenSpotlight.exe`. Distribute the **entire ScreenSpotlight folder**, including `_internal`; the destination computer does not need Python. The executable is not code-signed. User preferences remain per-user rather than alongside the executable.
+Or double-click `build.cmd`. Launch or distribute only `dist\ScreenSpotlight.exe`; the destination computer does not need Python or extra application files. The old `dist\ScreenSpotlight` folder, if present, belongs to previous builds. The executable is not code-signed. User preferences remain per-user rather than alongside the executable.
 
 ## Launch from PLAR
 
@@ -83,7 +83,7 @@ from PySide6.QtCore import QProcess
 
 # Packaged PLAR launching the packaged helper:
 self.spotlight_process = QProcess(self)
-self.spotlight_process.setProgram(str(tools_dir / "ScreenSpotlight" / "ScreenSpotlight.exe"))
+self.spotlight_process.setProgram(str(tools_dir / "ScreenSpotlight.exe"))
 self.spotlight_process.start()
 
 # Source development alternative (python_exe must be a Python interpreter):
@@ -109,10 +109,10 @@ py tests/package_smoke.py
 py tests/annotation_native_smoke.py
 ```
 
-Verification covers 42 automated tests, including spotlight geometry and input modes, annotation rendering, independently visible size controls, immediate drawing on tab entry, marker sequences and colors, letter entry, equal full-width tabs, undo/redo, erasing, Escape dispatch, monitor removal, capture cropping, persistent controls, and capture radio availability. The Windows spotlight check moves the real mouse pointer temporarily to verify dragging, then restores it. It also checks control-panel window flags, shortcut restoration, native click-through at 100% dimming, and hotkey dispatch/cleanup. The annotation Windows check verifies native hit testing, switching tools with visible controls, annotated capture pixels, exclusion of controls, crop size, panel layout, and real hover tooltips while drawing has focus; it restores the pointer and saves previews of both tabs. The package check covers startup/exit and rejection of a second instance. Actual browser clicking/scrolling and physical mixed-DPI setups remain manual checks.
+Verification covers 42 automated tests, including spotlight geometry and input modes, annotation rendering, independently visible size controls, immediate drawing on tab entry, marker sequences and colors, letter entry, equal full-width tabs, undo/redo, erasing, Escape dispatch, monitor removal, capture cropping, persistent controls, and capture radio availability. The Windows spotlight check moves the real mouse pointer temporarily to verify dragging, then restores it. It also checks control-panel window flags, shortcut restoration, native click-through at 100% dimming, and hotkey dispatch/cleanup. The annotation Windows check verifies native hit testing, switching tools with visible controls, annotated capture pixels, exclusion of controls, crop size, panel layout, and real hover tooltips while drawing has focus; it restores the pointer and saves previews of both tabs. The package check copies only the executable into a temporary folder and checks startup/exit and rejection of a second instance there. Actual browser clicking/scrolling and physical mixed-DPI setups remain manual checks.
 
 Manual check: select an area over a browser, click and scroll both inside and outside it, edit and resize, try the global shortcuts while the browser has focus, then clear and quit. Repeat on monitors with different scaling settings.
 
 Implementation references: [Qt window flags and translucency](https://doc.qt.io/qt-6/qt.html), [Windows RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey).
 
-The title bar is exactly `Screen Spotlight`. Version `0.1.31` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Annotation drawing tools use the supplied PNGs in `icons`; tabs and capture actions use text labels. Version metadata is defined in `version_info.txt`.
+The title bar is exactly `Screen Spotlight`. Version `0.1.32` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Annotation drawing tools use the supplied PNGs in `icons`; tabs and capture actions use text labels. Version metadata is defined in `version_info.txt`.

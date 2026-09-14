@@ -10,5 +10,5 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-echo Built dist\ScreenSpotlight\ScreenSpotlight.exe
+echo Built dist\ScreenSpotlight.exe
 pause

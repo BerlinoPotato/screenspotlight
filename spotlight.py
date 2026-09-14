@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.31"
+APP_VERSION = "0.1.32"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
