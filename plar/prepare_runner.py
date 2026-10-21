@@ -21,7 +21,7 @@ def runner_source():
         f'    pixmap.loadFromData(base64.b64decode({icons!r}[name]))\n'
         '    return pixmap',
     )
-    source = source.replace("from annotations import AnnotationTools, tool_icon, set_overlay_flags", annotations)
+    source = source.replace("from annotations import AnnotationTools, OverlayWindow, tool_icon, set_overlay_flags", annotations)
     source = source.replace(
         "def app_icon():\n    return QIcon(str(Path(__file__).resolve().with_name(\"screenspotlight.png\")))",
         "def app_icon():\n"

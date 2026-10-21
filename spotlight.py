@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from emergency import EmergencyExit, SystemCursor
-from annotations import AnnotationTools, tool_icon, set_overlay_flags
+from annotations import AnnotationTools, OverlayWindow, tool_icon, set_overlay_flags
 
 from PySide6.QtCore import (
     QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve,
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.35"
+APP_VERSION = "0.1.37"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -120,7 +120,7 @@ class Hotkeys(QAbstractNativeEventFilter):
         return False, 0
 
 
-class Overlay(QWidget):
+class Overlay(OverlayWindow):
     def __init__(self, controller, screen):
         super().__init__()
         self.controller = controller
@@ -158,7 +158,8 @@ class Overlay(QWidget):
         region = QRegion(self.rect())
         if panel.isVisible() and not panel.isMinimized():
             region -= QRegion(panel.frameGeometry().translated(-self.geometry().topLeft()))
-        self.setMask(region)
+        if self.mask() != region:
+            self.setMask(region)
 
     def paintEvent(self, event):
         c = self.controller
@@ -518,6 +519,9 @@ class Panel(QWidget):
             "Right-click   Clear while selecting or editing\n"
             "Alt+Tab / Ctrl+Shift+P   Show controls\n\n"
             "Annotation: click a tool to start drawing. Controls stay available.\n"
+            "Annotations stay pinned to their screen when controls move.\n"
+            "Move to this screen: confirm moving the area, keeping all marks.\n"
+            "Clear annotations resets marks and numbering; Undo restores them.\n"
             "Esc / Enter ends drawing and keeps the marks.\n"
             "Ctrl+Z / Ctrl+Y undoes / redoes while drawing.\n"
             "Move: drag any mark; click then use arrows (Shift = 10 pixels).\n"
@@ -525,7 +529,8 @@ class Panel(QWidget):
             "Horizontal highlighter: Shift makes the line vertical.\n"
             "Rectangle / filled rectangle: Shift makes a square.\n"
             "Laser: dot only; cursor returns over controls and when laser stops.\n"
-            "Esc or Pointer stops the laser. Capture & Copy captures in one click.\n"
+            "Esc or Pointer stops the laser. Capture Image copies a fresh screenshot.\n"
+            "Save Image captures a fresh screenshot and opens the save dialog.\n"
             "Capture defaults to the spotlight area, or the monitor if no area exists.\n\n"
             "While editing: arrows move; Shift+arrows move faster.\n"
             "R / C changes shape; + / minus adjusts dimming.\n\n"
@@ -747,8 +752,8 @@ class Spotlight:
 
     def geometry_changed(self, *_):
         screens = self.app.screens()
+        self.annotations.sync_screen(screens)
         if self.selected_screen is not None and self.selected_screen not in screens:
-            self.annotations.reset_screen()
             self.clear()
             return
         selected_overlay = next((o for o in self.overlays if o.screen_ref == self.selected_screen), None)
@@ -765,10 +770,6 @@ class Spotlight:
                     width = height = min(width, height)
                 rect.setSize(QSizeF(width, height))
                 self.focus = move_rect(rect, QPointF(), QRectF(bounds))
-        annotation_screen = self.annotations.screen
-        if annotation_screen is not None:
-            if annotation_screen not in screens or self.annotations.overlay.geometry() != annotation_screen.geometry():
-                self.annotations.reset_screen()
         for overlay in self.overlays:
             if overlay.screen_ref not in screens:
                 continue

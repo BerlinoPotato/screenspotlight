@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QPoint, QRectF
+from PySide6.QtCore import QPoint, QRectF, Qt
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtTest import QTest
 
@@ -20,6 +20,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     c = Spotlight(app, persist=False)
     target = QWidget()
+    target.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
     target.setWindowTitle("Screen Spotlight verification target")
     area = app.primaryScreen().availableGeometry()
     target.setGeometry(area.x() + 100, area.y() + 100, 440, 320)
@@ -34,16 +35,10 @@ def main():
     user32.PostThreadMessageW.restype = wintypes.BOOL
     kernel32 = ctypes.WinDLL("kernel32")
     kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
-    user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
-    user32.mouse_event.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
-    saved_cursor = wintypes.POINT()
-    user32.GetCursorPos(ctypes.byref(saved_cursor))
-    dragging = False
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 
     def process():
-        for _ in range(12):
-            app.processEvents()
+        QTest.qWait(150)
 
     try:
         target.show()
@@ -80,20 +75,22 @@ def main():
         point = wintypes.POINT(round(local.x() * scale), round(local.y() * scale))
         assert user32.ClientToScreen(int(overlay.winId()), ctypes.byref(point))
         assert user32.WindowFromPoint(point) == int(overlay.winId()), "Edit hole does not receive native mouse input"
-        user32.SetCursorPos(point.x, point.y)
-        QTest.qWait(80)
-        dragging = True
-        user32.mouse_event(0x0002, 0, 0, 0, 0)
-        QTest.qWait(80)
-        user32.SetCursorPos(point.x + round(40 * scale), point.y + round(30 * scale))
-        QTest.qWait(80)
-        user32.mouse_event(0x0004, 0, 0, 0, 0)
-        dragging = False
-        QTest.qWait(80)
+        # Send explicit native client coordinates so this check cannot compete
+        # with a person using the mouse while the agent is running.
+        def mouse_message(message, position, buttons):
+            x, y = round(position.x() * scale), round(position.y() * scale)
+            packed = (x & 0xffff) | ((y & 0xffff) << 16)
+            assert user32.PostMessageW(int(overlay.winId()), message, buttons, packed)
+            QTest.qWait(80)
+
+        mouse_message(0x0201, local, 1)  # WM_LBUTTONDOWN, MK_LBUTTON
+        assert overlay.drag_kind == "move", "Native mouse press did not begin moving"
+        mouse_message(0x0200, local + QPoint(40, 30), 1)  # WM_MOUSEMOVE
+        mouse_message(0x0202, local + QPoint(40, 30), 0)  # WM_LBUTTONUP
         assert abs(c.focus.x() - original.x() - 40) <= 1, (original, c.focus)
         assert abs(c.focus.y() - original.y() - 30) <= 1, (original, c.focus)
         assert c.focus.size() == original.size()
-        print("PASS: Real Windows mouse drag moves the existing area without resizing it")
+        print("PASS: Native Windows mouse messages move the existing area without resizing it")
         assert not c.hotkey_errors, c.hotkey_errors
         assert 3 in c.hotkeys.registered, "Escape hotkey registration failed"
         assert user32.PostThreadMessageW(kernel32.GetCurrentThreadId(), 0x0312, 3, 0)
@@ -121,9 +118,6 @@ def main():
         print("PASS: Controls remain a normal minimized window and Ctrl+Shift+P restores them")
         c.panel.grab().save(str(Path(__file__).resolve().parents[1] / "panel-preview.png"))
     finally:
-        if dragging:
-            user32.mouse_event(0x0004, 0, 0, 0, 0)
-        user32.SetCursorPos(saved_cursor.x, saved_cursor.y)
         c.shutdown()
         target.close()
         c.panel.hide()

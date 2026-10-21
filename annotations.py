@@ -8,7 +8,7 @@ from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QE
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QValidator
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
 )
 
 
@@ -37,9 +37,8 @@ TOOL_DESCRIPTIONS = {
     "Redo": "Redo: restore the last undone change",
     "Clear annotations": "Clear annotations: erase all marks",
     "Interact with desktop": "Interact with desktop: stop drawing and use the app underneath; keep annotations visible",
-    "Capture screen": "Capture: capture the chosen area with annotations",
-    "Capture and copy": "Capture and copy: take a fresh capture of the chosen area and copy it directly to the clipboard",
-    "Save PNG": "Save the latest capture as a PNG image (capture first)",
+    "Capture Image": "Capture Image: take a fresh screenshot of the chosen area or monitor and copy it to the clipboard",
+    "Save Image": "Save Image: take a fresh screenshot of the chosen area or monitor and choose where to save the PNG image",
 }
 
 
@@ -298,12 +297,28 @@ def set_overlay_flags(widget, flags):
     """Update a visible native overlay without QWidget's hide/show transition."""
     window = widget.windowHandle()
     if widget.isVisible() and window is not None and QApplication.platformName() == "windows":
-        window.setFlags(flags)
-    else:
+        if window.flags() != flags:
+            window.setFlags(flags)
+    elif widget.windowFlags() != flags:
         widget.setWindowFlags(flags)
 
 
-class InkOverlay(QWidget):
+class OverlayWindow(QWidget):
+    def nativeEvent(self, event_type, message):
+        if QApplication.platformName() == "windows":
+            import ctypes
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x007C and ctypes.c_ssize_t(msg.wParam).value == -20:  # WM_STYLECHANGING, GWL_EXSTYLE
+                styles = (wintypes.DWORD * 2).from_address(msg.lParam)
+                # Qt reapplies extended styles when changing input/focus flags,
+                # temporarily stripping WS_EX_LAYERED and dropping the surface.
+                # Keep its backing pixels while allowing the input flags to change.
+                styles[1] |= styles[0] & 0x00080000  # WS_EX_LAYERED
+        return super().nativeEvent(event_type, message)
+
+
+class InkOverlay(OverlayWindow):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
@@ -341,9 +356,11 @@ class InkOverlay(QWidget):
 
     def stop_laser(self):
         self.owner.controller.system_cursor.restore()
+        active = self.laser_timer.isActive() or self.laser_point is not None
         self.laser_timer.stop()
         self.laser_point = None
-        self.update()
+        if active:
+            self.update()
 
     def hideEvent(self, event):
         self.stop_laser()
@@ -385,7 +402,8 @@ class InkOverlay(QWidget):
         if panel.isVisible() and not panel.isMinimized():
             frame = panel.frameGeometry().translated(-self.geometry().topLeft())
             region -= QRegion(frame)
-        self.setMask(region)
+        if self.mask() != region:
+            self.setMask(region)
         for overlay in self.owner.controller.overlays:
             overlay.sync_controls_mask()
 
@@ -393,6 +411,7 @@ class InkOverlay(QWidget):
         if event.type() in (QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Show,
                             QEvent.Type.Hide, QEvent.Type.WindowStateChange):
             self.sync_controls_mask()
+            self.owner.sync_screen_controls()
         return super().eventFilter(watched, event)
 
     def paintEvent(self, event):
@@ -616,6 +635,8 @@ class AnnotationTools(QWidget):
         self.tool_widths = {}
         self.color = 0
         self.screen = None
+        self.screen_key = None
+        self.screen_name = ""
         self.drawing = False
         self.marks = []
         self.history = []
@@ -629,6 +650,16 @@ class AnnotationTools(QWidget):
         tools_box = QGroupBox("Tools")
         tools_layout = QVBoxLayout(tools_box)
         layout.addWidget(tools_box)
+        screen_row = QHBoxLayout()
+        self.screen_label = QLabel("Screen not chosen")
+        self.screen_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        screen_row.addWidget(self.screen_label, 1)
+        self.move_screen_button = QPushButton("Move to this screen")
+        self.move_screen_button.setToolTip("Move the annotation area to the controls' monitor after confirmation; keep all marks and undo history")
+        self.move_screen_button.setEnabled(False)
+        self.move_screen_button.clicked.connect(self.move_to_controls_screen)
+        screen_row.addWidget(self.move_screen_button)
+        tools_layout.addLayout(screen_row)
         grid = QGridLayout()
         self.tools = QButtonGroup(self)
         self.tool_buttons = {}
@@ -811,12 +842,9 @@ class AnnotationTools(QWidget):
             row.addWidget(button)
         capture_layout.addWidget(self.capture_control)
         row = QHBoxLayout()
-        self.capture_button = self.button("Capture screen", "15 Capture Screen.png", self.capture)
+        self.capture_button = self.button("Capture Image", "15 Capture Screen.png", self.capture)
         row.addWidget(self.capture_button)
-        self.copy_button = self.button("Capture and copy", "16 Copy to Clipboard.png", self.capture_and_copy)
-        self.save_button = self.button("Save PNG", "17 Save Image.png", self.save)
-        self.save_button.setEnabled(False)
-        row.addWidget(self.copy_button)
+        self.save_button = self.button("Save Image", "17 Save Image.png", self.save)
         row.addWidget(self.save_button)
         capture_layout.addLayout(row)
         for section_layout in (tools_layout, color_layout, settings_layout, capture_layout):
@@ -826,8 +854,8 @@ class AnnotationTools(QWidget):
 
     def button(self, label, filename, action):
         button = IconButton()
-        if label in ("Capture screen", "Capture and copy", "Save PNG"):
-            button.setText({"Capture screen": "Capture", "Capture and copy": "Capture && Copy", "Save PNG": "Save PNG"}[label])
+        if label in ("Capture Image", "Save Image"):
+            button.setText(label)
         else:
             button.setIcon(tool_icon(filename))
         button.setIconSize(QSize(27, 27))
@@ -841,6 +869,7 @@ class AnnotationTools(QWidget):
 
     def set_tool(self, tool):
         was_laser = self.tool == "laser"
+        was_drawing = self.drawing
         self.overlay.pending = None
         self.overlay.reset_edit()
         if self.tool in ("arrow", "rectangle", "circle"):
@@ -862,7 +891,7 @@ class AnnotationTools(QWidget):
         self.overlay.setCursor(Qt.CursorShape.ArrowCursor if tool == "move" else Qt.CursorShape.CrossCursor)
         self.update_settings()
         self.start()
-        if was_laser != (tool == "laser"):
+        if was_drawing and self.drawing and was_laser != (tool == "laser"):
             self.overlay.present(True)
             self.controller.panel.raise_()
 
@@ -945,17 +974,99 @@ class AnnotationTools(QWidget):
         self.future.clear()
         self.sequence.setValue(1)
         self.screen = None
+        self.screen_key = None
+        self.screen_name = ""
         self.status.setText("")
+        self.sync_screen_controls()
+
+    @staticmethod
+    def screen_identity(screen):
+        return (screen.name(), screen.serialNumber(), screen.manufacturer(), screen.model())
+
+    def bind_screen(self, screen):
+        self.screen = screen
+        self.screen_key = self.screen_identity(screen)
+        self.screen_name = screen.name() or "Annotation screen"
+        self.sync_screen_controls()
+
+    def sync_screen_controls(self):
+        if not hasattr(self.controller, "panel"):
+            return
+        text = (f"Pinned: {self.screen_name}" if self.screen is not None else
+                f"Disconnected: {self.screen_name}" if self.screen_key is not None else "Screen not chosen")
+        self.screen_label.setText(text)
+        self.screen_label.setToolTip(text + ". Moving controls does not move annotations.")
+        self.move_screen_button.setEnabled(
+            not self.capturing and self.screen_key is not None and
+            self.controller.panel.screen() is not None and self.controller.panel.screen() != self.screen)
+
+    def sync_screen(self, screens=None):
+        screens = self.controller.app.screens() if screens is None else screens
+        if self.screen is not None and self.screen not in screens:
+            # Never dereference a removed QScreen, or discard its annotations.
+            self.screen = None
+            self.drawing = False
+            self.overlay.pending = None
+            self.overlay.reset_edit()
+            self.overlay.hide()
+            if self.controller.mode == "off":
+                self.controller.disarm_escape()
+            self.status.setText("Annotation screen disconnected. Marks kept; move to this screen to continue.")
+        if self.screen is None and self.screen_key is not None:
+            match = next((s for s in screens if self.screen_identity(s) == self.screen_key), None)
+            if match is not None:
+                self.bind_screen(match)
+                self.overlay.present(False)
+                self.status.setText("Annotation screen reconnected. Marks restored.")
+        if self.screen is not None and self.overlay.geometry() != self.screen.geometry():
+            # Marks and undo snapshots use monitor-local coordinates. A layout,
+            # DPI or resolution change only changes the surface, never the ink.
+            self.overlay.pending = None
+            self.overlay.reset_edit()
+            self.overlay.setGeometry(self.screen.geometry())
+            self.overlay.sync_controls_mask()
+            self.overlay.update()
+        self.sync_screen_controls()
+
+    def move_to_controls_screen(self):
+        self.sync_screen()
+        target = self.controller.panel.screen()
+        if self.capturing or self.screen_key is None or target is None or target == self.screen:
+            return
+        was_drawing = self.drawing
+        self.interact()
+        answer = QMessageBox.question(
+            self.controller.panel, "Move annotation screen",
+            f"Move the annotation area from {self.screen_name} to {target.name()}?\n\n"
+            "All marks and undo history will be kept at the same positions relative to the screen. "
+            "Marks beyond a smaller screen's edges stay saved until you move back.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer == QMessageBox.StandardButton.Yes and target in self.controller.app.screens():
+            self.bind_screen(target)
+            if was_drawing:
+                self.start()
+            else:
+                self.overlay.present(False)
+            self.status.setText(f"Annotations moved to {self.screen_name}")
+        elif was_drawing:
+            self.start()
+        self.sync_screen_controls()
 
     def start(self):
         c = self.controller
-        target = c.selected_screen or c.panel.screen()
-        if self.drawing and self.screen == target:
+        self.sync_screen()
+        if self.screen is None:
+            if self.screen_key is not None:
+                self.status.setText("Annotation screen disconnected. Marks kept; move to this screen to continue.")
+                return
+            target = c.selected_screen or c.panel.screen()
+            if target is None:
+                return
+            self.bind_screen(target)
+        if self.drawing:
             self.status.setText(f"{self.tool_specs[self.tool][0]} active")
             return
-        if self.screen and self.screen != target:
-            self.reset_screen()
-        self.screen = target
         if not c.focus.isEmpty():
             if c.mode != "present":
                 c.activate("present", keep_controls=True)
@@ -971,23 +1082,26 @@ class AnnotationTools(QWidget):
         self.status.setText(f"{self.tool_specs[self.tool][0]} active")
 
     def interact(self):
+        was_drawing = self.drawing
         self.drawing = False
-        if self.screen:
+        if self.screen and was_drawing:
             self.overlay.present(False)
             self.controller.panel.raise_()
         if self.controller.mode == "off":
             self.controller.disarm_escape()
         self.status.setText("Desktop interaction")
 
-    def capture_and_copy(self):
-        self.capture(copy_to_clipboard=True)
-
-    def capture(self, copy_to_clipboard=False):
+    def capture(self, *, save_to_file=False):
         if self.capturing:
             return
+        self.sync_screen()
+        self.sync_capture_scope()
+        if self.capture_scope.checkedId() == 1 and self.screen_key is not None and self.screen is None:
+            self.status.setText("Annotation screen disconnected. Move to this screen before capturing.")
+            return
         self.capturing = True
+        self.sync_screen_controls()
         self.capture_button.setEnabled(False)
-        self.copy_button.setEnabled(False)
         self.save_button.setEnabled(False)
         c = self.controller
         self.sync_capture_scope()
@@ -997,15 +1111,16 @@ class AnnotationTools(QWidget):
         elif c.mode != "off":
             c.clear()
         self.interact()
-        screen = c.selected_screen or self.screen or c.panel.screen()
-        crop = QRectF(c.focus) if self.capture_scope.checkedId() == 0 and not c.focus.isEmpty() else QRectF(screen.geometry())
+        area = self.capture_scope.checkedId() == 0 and not c.focus.isEmpty()
+        screen = c.selected_screen if area else self.screen or c.panel.screen()
+        crop = QRectF(c.focus) if area else QRectF(screen.geometry())
         c.panel.information.hide()
         c.panel.hide()
         self.status.setText("Capturing...")
         # Let the compositor remove our controls before reading desktop pixels.
-        QTimer.singleShot(250, lambda: self.finish_capture(screen, crop, copy_to_clipboard))
+        QTimer.singleShot(250, lambda: self.finish_capture(screen, crop, save_to_file=save_to_file))
 
-    def finish_capture(self, screen, crop, copy_to_clipboard=False):
+    def finish_capture(self, screen, crop, *, save_to_file=False):
         try:
             if screen not in self.controller.app.screens():
                 raise RuntimeError("The selected monitor is no longer available.")
@@ -1020,30 +1135,28 @@ class AnnotationTools(QWidget):
             if captured.isNull():
                 raise RuntimeError("The capture area is outside the selected monitor.")
             self.captured = captured
-            if copy_to_clipboard:
-                self.copy()
+            if save_to_file:
+                self.controller.show_panel()
+                self.status.setText("Choose where to save the image.")
+                path, _ = QFileDialog.getSaveFileName(
+                    self.controller.panel, "Save image", "Screen Spotlight.png", "PNG image (*.png)")
+                if path:
+                    if not path.lower().endswith(".png"):
+                        path += ".png"
+                    self.status.setText("Image saved" if captured.save(path, "PNG") else "Could not save image")
+                else:
+                    self.status.setText("Save canceled")
             else:
-                self.status.setText(f"Captured {self.captured.width()} x {self.captured.height()} pixels")
+                QApplication.clipboard().setPixmap(captured)
+                self.status.setText("Copied to clipboard")
         except Exception as error:
             self.status.setText(str(error))
         finally:
             self.capturing = False
             self.capture_button.setEnabled(True)
-            self.copy_button.setEnabled(True)
-            self.save_button.setEnabled(not self.captured.isNull())
+            self.save_button.setEnabled(True)
+            self.sync_screen_controls()
             self.controller.show_panel()
 
-    def copy(self):
-        if not self.captured.isNull():
-            QApplication.clipboard().setPixmap(self.captured)
-            self.status.setText("Copied to clipboard")
-
     def save(self):
-        if self.captured.isNull():
-            return
-        self.interact()
-        path, _ = QFileDialog.getSaveFileName(self, "Save capture", "Screen Spotlight.png", "PNG image (*.png)")
-        if path:
-            if not path.lower().endswith(".png"):
-                path += ".png"
-            self.status.setText("Image saved" if self.captured.save(path, "PNG") else "Could not save image")
+        self.capture(save_to_file=True)

@@ -2,12 +2,14 @@ import os
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from annotations import Mark, PALETTES, marker_label
 from spotlight import Spotlight
@@ -231,7 +233,7 @@ class AnnotationTests(unittest.TestCase):
             self.a.finish_capture(screen, QRectF(-450, 30, 120, 80))
         self.assertEqual(self.a.captured.size().width(), 240)
         self.assertEqual(self.a.captured.size().height(), 160)
-        self.assertTrue(self.a.copy_button.isEnabled())
+        self.assertTrue(self.a.capture_button.isEnabled())
 
     def test_capture_defaults_to_selection_with_monitor_fallback(self):
         self.c.selected_screen = self.app.primaryScreen()
@@ -424,7 +426,7 @@ class AnnotationTests(unittest.TestCase):
         self.assertFalse(self.a.overlay.laser_timer.isActive())
         self.assertIsNone(self.a.overlay.laser_point)
 
-    def test_capture_and_copy_button_always_copies_fresh_pixels(self):
+    def test_capture_image_always_copies_fresh_pixels(self):
         screen = self.app.primaryScreen()
         old = QPixmap(40, 40)
         old.fill(QColor("red"))
@@ -433,18 +435,18 @@ class AnnotationTests(unittest.TestCase):
         self.a.captured = old
         self.app.clipboard().setPixmap(old)
         with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=fresh):
-            self.a.copy_button.click()
+            self.a.capture_button.click()
             self.assertTrue(self.a.capturing)
             self.assertFalse(self.c.panel.isVisible())
-            self.assertFalse(self.a.copy_button.isEnabled())
-            self.a.capture_and_copy()
+            self.assertFalse(self.a.capture_button.isEnabled())
+            self.a.capture()
             self.assertEqual(timer.call_count, 1)
             timer.call_args.args[1]()
         self.assertEqual(self.app.clipboard().pixmap().toImage().pixelColor(10, 10), QColor("#11aa33"))
         self.assertEqual(self.a.status.text(), "Copied to clipboard")
         self.assertFalse(self.a.capturing)
         self.assertTrue(self.c.panel.isVisible())
-        self.assertTrue(self.a.copy_button.isEnabled())
+        self.assertTrue(self.a.capture_button.isEnabled())
         self.assertTrue(self.a.save_button.isEnabled())
 
     def test_failed_capture_keeps_clipboard_and_restores_controls(self):
@@ -453,12 +455,12 @@ class AnnotationTests(unittest.TestCase):
         self.app.clipboard().setPixmap(old)
         screen = self.app.primaryScreen()
         with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=QPixmap()):
-            self.a.copy_button.click()
+            self.a.capture_button.click()
             timer.call_args.args[1]()
         self.assertEqual(self.app.clipboard().pixmap().toImage().pixelColor(10, 10), QColor("red"))
         self.assertIn("unavailable", self.a.status.text())
-        self.assertTrue(self.a.copy_button.isEnabled())
-        self.assertFalse(self.a.save_button.isEnabled())
+        self.assertTrue(self.a.capture_button.isEnabled())
+        self.assertTrue(self.a.save_button.isEnabled())
         self.assertFalse(self.a.capturing)
         self.assertTrue(self.c.panel.isVisible())
 
@@ -591,3 +593,256 @@ class AnnotationTests(unittest.TestCase):
         self.assertLess(color.red(), 70)
         self.assertEqual(color.red(), color.green())
         self.assertEqual(color.green(), color.blue())
+
+
+    def other_screen(self, name="Other monitor", bounds=QRect(-1000, -200, 900, 700)):
+        screen = Mock()
+        screen.name.return_value = name
+        screen.serialNumber.return_value = name + " serial"
+        screen.manufacturer.return_value = "Test"
+        screen.model.return_value = "Monitor"
+        screen.geometry.return_value = bounds
+        return screen
+
+    def seed_screen_history(self):
+        self.c.panel.tabs.setCurrentIndex(1)
+        first = Mark("pen", "#e53935", 4, 40, [QPointF(100, 100), QPointF(180, 100)])
+        second = Mark("number", "#3265e8", 4, 40, [QPointF(700, 700)], "8")
+        self.a.marks = [first, second]
+        self.a.history = [([first], 8)]
+        self.a.future = [([first, second], 10)]
+        self.a.sequence.setValue(9)
+        return list(self.a.marks), list(self.a.history), list(self.a.future)
+
+    def assert_screen_history(self, snapshot):
+        self.assertEqual((self.a.marks, self.a.history, self.a.future), snapshot)
+        self.assertEqual(self.a.sequence.value(), 9)
+
+    def test_controls_and_spotlight_screen_changes_do_not_repin_or_delete_ink(self):
+        snapshot = self.seed_screen_history()
+        pinned = self.a.screen
+        bounds = self.a.overlay.geometry()
+        other = self.other_screen()
+        with patch.object(self.app, "screens", return_value=[pinned, other]), patch.object(type(self.c.panel), "screen", return_value=other):
+            self.c.selected_screen = other
+            self.c.focus = QRectF(-900, 0, 200, 200)
+            self.c.mode = "present"
+            self.a.set_tool("highlighter")
+            self.a.set_tool("move")
+            QTest.mouseClick(self.a.overlay, Qt.MouseButton.LeftButton, pos=QPoint(140, 100))
+            self.assertEqual(self.a.overlay.selected_index, 0)
+            self.a.interact()
+            self.a.start()
+            self.c.panel.tabs.setCurrentIndex(0)
+            self.c.panel.tabs.setCurrentIndex(1)
+            self.c.geometry_changed()
+            self.assertTrue(self.a.move_screen_button.isEnabled())
+            self.assertIs(self.a.screen, pinned)
+            self.assertEqual(self.a.overlay.geometry(), bounds)
+            self.assert_screen_history(snapshot)
+
+    def test_changed_annotation_bounds_keep_all_ink_and_undo_snapshots(self):
+        snapshot = self.seed_screen_history()
+        screen = self.a.screen
+        original = screen.geometry()
+        smaller = QRect(-500, 40, 400, 300)
+        with patch.object(type(screen), "geometry", return_value=smaller):
+            self.c.geometry_changed()
+            self.assertEqual(self.a.overlay.geometry(), smaller)
+            self.assertTrue(self.a.drawing)
+            self.assert_screen_history(snapshot)
+        self.c.geometry_changed()
+        self.assertEqual(self.a.overlay.geometry(), original)
+        self.assert_screen_history(snapshot)
+        self.a.undo()
+        self.assertEqual(len(self.a.marks), 1)
+        self.assertEqual(self.a.sequence.value(), 8)
+        self.a.redo()
+        self.assertEqual(self.a.marks, snapshot[0])
+
+    def test_disconnected_annotation_screen_keeps_ink_without_falling_back(self):
+        snapshot = self.seed_screen_history()
+        pinned = self.a.screen
+        other = self.other_screen()
+        with patch.object(self.app, "screens", return_value=[other]), patch.object(type(pinned), "geometry", side_effect=RuntimeError("Deleted screen")), patch.object(type(self.c.panel), "screen", return_value=other):
+            self.c.geometry_changed()
+            self.assertIsNone(self.a.screen)
+            self.assertFalse(self.a.drawing)
+            self.assertFalse(self.a.overlay.isVisible())
+            self.a.set_tool("pen")
+            self.assertIsNone(self.a.screen)
+            self.assertIn("disconnected", self.a.status.text())
+            self.assertTrue(self.a.move_screen_button.isEnabled())
+            self.assert_screen_history(snapshot)
+
+    def test_same_monitor_reconnects_and_restores_retained_marks(self):
+        snapshot = self.seed_screen_history()
+        original = self.a.screen
+        replacement = self.other_screen()
+        replacement.name.return_value, replacement.serialNumber.return_value, replacement.manufacturer.return_value, replacement.model.return_value = self.a.screen_key
+        self.a.sync_screen([])
+        with patch.object(self.app, "screens", return_value=[replacement]):
+            self.a.sync_screen()
+            self.assertIs(self.a.screen, replacement)
+            self.assertIsNot(self.a.screen, original)
+            self.assertTrue(self.a.overlay.isVisible())
+            self.assertFalse(self.a.drawing)
+            self.assert_screen_history(snapshot)
+
+    def test_removing_spotlight_monitor_preserves_annotations_on_other_monitor(self):
+        snapshot = self.seed_screen_history()
+        pinned = self.a.screen
+        self.c.selected_screen = self.other_screen()
+        self.c.focus = QRectF(-900, 0, 200, 200)
+        self.c.mode = "present"
+        self.c.geometry_changed()
+        self.assertTrue(self.c.focus.isEmpty())
+        self.assertIs(self.a.screen, pinned)
+        self.assertTrue(self.a.overlay.isVisible())
+        self.assert_screen_history(snapshot)
+
+    def test_explicit_screen_move_requires_confirmation_and_preserves_history(self):
+        snapshot = self.seed_screen_history()
+        pinned = self.a.screen
+        other = self.other_screen()
+        with patch.object(self.app, "screens", return_value=[pinned, other]), patch.object(type(self.c.panel), "screen", return_value=other), patch("annotations.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel) as question:
+            self.a.move_screen_button.setEnabled(True)
+            self.a.move_screen_button.click()
+            question.assert_called_once()
+            self.assertIs(self.a.screen, pinned)
+            self.assertTrue(self.a.drawing)
+            self.assert_screen_history(snapshot)
+            question.return_value = QMessageBox.StandardButton.Yes
+            self.a.move_screen_button.click()
+            self.assertIs(self.a.screen, other)
+            self.assertEqual(self.a.overlay.geometry(), other.geometry())
+            self.assertTrue(self.a.drawing)
+            self.assert_screen_history(snapshot)
+            self.a.undo()
+            self.assertEqual(len(self.a.marks), 1)
+            self.a.redo()
+            self.assertEqual(self.a.marks, snapshot[0])
+
+    def test_clear_resets_marks_and_sequence_but_keeps_screen_and_supports_undo(self):
+        snapshot = self.seed_screen_history()
+        pinned = self.a.screen
+        self.a.clear()
+        self.assertIs(self.a.screen, pinned)
+        self.assertEqual(self.a.marks, [])
+        self.assertEqual(self.a.sequence.value(), 1)
+        self.a.undo()
+        self.assertEqual(self.a.marks, snapshot[0])
+        self.assertEqual(self.a.sequence.value(), 9)
+
+    def test_full_monitor_capture_uses_pinned_annotation_monitor(self):
+        self.seed_screen_history()
+        pinned = self.a.screen
+        self.c.selected_screen = self.other_screen()
+        self.c.focus = QRectF(-900, 0, 200, 200)
+        self.c.mode = "present"
+        self.a.sync_capture_scope()
+        self.a.capture_scope.button(1).click()
+        with patch("annotations.QTimer.singleShot") as timer, patch.object(self.a, "finish_capture") as finish:
+            self.a.capture()
+            timer.call_args.args[1]()
+            self.assertIs(finish.call_args.args[0], pinned)
+            self.assertEqual(finish.call_args.args[1], QRectF(pinned.geometry()))
+            self.assertFalse(self.a.move_screen_button.isEnabled())
+
+
+    def test_capture_card_has_exactly_two_ready_image_actions(self):
+        self.assertTrue(self.a.captured.isNull())
+        box = self.a.capture_button.parentWidget()
+        buttons = box.findChildren(QPushButton, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        self.assertEqual([button.text() for button in buttons], ["Capture Image", "Save Image"])
+        for button in buttons:
+            self.assertTrue(button.isEnabled())
+            self.assertEqual(button.accessibleName(), button.text())
+            self.assertIn("fresh screenshot", button.toolTip())
+
+    def test_save_image_captures_fresh_pixels_each_time_and_preserves_clipboard(self):
+        screen = self.app.primaryScreen()
+        clipboard = QPixmap(20, 20)
+        clipboard.fill(QColor("#774411"))
+        self.app.clipboard().setPixmap(clipboard)
+        self.a.captured = clipboard
+        with tempfile.TemporaryDirectory(prefix="spotlight-save-") as folder:
+            path = Path(folder) / "chosen image"
+
+            def choose_location(*args):
+                self.assertIs(args[0], self.c.panel)
+                self.assertTrue(self.c.panel.isVisible())
+                self.assertTrue(self.a.capturing)
+                self.assertFalse(self.a.capture_button.isEnabled())
+                self.assertFalse(self.a.save_button.isEnabled())
+                return str(path), "PNG image (*.png)"
+
+            for color in ("#11aa33", "#3355cc"):
+                fresh = QPixmap(screen.geometry().size())
+                fresh.fill(QColor(color))
+                with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=fresh) as grab, patch("annotations.QFileDialog.getSaveFileName", side_effect=choose_location) as dialog:
+                    self.a.save_button.click()
+                    self.assertTrue(self.a.capturing)
+                    self.assertFalse(self.c.panel.isVisible())
+                    dialog.assert_not_called()
+                    self.a.capture()
+                    self.a.save()
+                    self.assertEqual(timer.call_count, 1)
+                    timer.call_args.args[1]()
+                    grab.assert_called_once_with(0)
+                    dialog.assert_called_once()
+                image = QImage(str(path) + ".png")
+                self.assertFalse(image.isNull())
+                self.assertEqual(image.pixelColor(10, 10), QColor(color))
+                self.assertEqual(self.a.status.text(), "Image saved")
+                self.assertFalse(self.a.capturing)
+                self.assertTrue(self.a.capture_button.isEnabled())
+                self.assertTrue(self.a.save_button.isEnabled())
+                self.assertEqual(self.app.clipboard().pixmap().toImage(), clipboard.toImage())
+
+    def test_cancel_save_restores_controls_and_keeps_clipboard(self):
+        screen = self.app.primaryScreen()
+        clipboard = QPixmap(20, 20)
+        clipboard.fill(QColor("red"))
+        self.app.clipboard().setPixmap(clipboard)
+        fresh = QPixmap(screen.geometry().size())
+        fresh.fill(QColor("green"))
+        with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=fresh), patch("annotations.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
+            self.a.save_button.click()
+            timer.call_args.args[1]()
+            dialog.assert_called_once()
+        self.assertEqual(self.a.status.text(), "Save canceled")
+        self.assertFalse(self.a.capturing)
+        self.assertTrue(self.c.panel.isVisible())
+        self.assertTrue(self.a.capture_button.isEnabled())
+        self.assertTrue(self.a.save_button.isEnabled())
+        self.assertEqual(self.app.clipboard().pixmap().toImage(), clipboard.toImage())
+
+    def test_failed_save_capture_does_not_offer_stale_image(self):
+        previous = QPixmap(20, 20)
+        previous.fill(QColor("red"))
+        self.a.captured = previous
+        screen = self.app.primaryScreen()
+        with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=QPixmap()), patch("annotations.QFileDialog.getSaveFileName") as dialog:
+            self.a.save_button.click()
+            timer.call_args.args[1]()
+            dialog.assert_not_called()
+        self.assertEqual(self.a.captured.toImage(), previous.toImage())
+        self.assertIn("unavailable", self.a.status.text())
+        self.assertFalse(self.a.capturing)
+        self.assertTrue(self.c.panel.isVisible())
+        self.assertTrue(self.a.capture_button.isEnabled())
+        self.assertTrue(self.a.save_button.isEnabled())
+
+    def test_failed_file_write_restores_both_capture_actions(self):
+        screen = self.app.primaryScreen()
+        fresh = QPixmap(screen.geometry().size())
+        fresh.fill(QColor("green"))
+        with patch("annotations.QTimer.singleShot") as timer, patch.object(type(screen), "grabWindow", return_value=fresh), patch("annotations.QFileDialog.getSaveFileName", return_value=("chosen.png", "PNG image (*.png)")), patch.object(QPixmap, "save", return_value=False):
+            self.a.save_button.click()
+            timer.call_args.args[1]()
+        self.assertEqual(self.a.status.text(), "Could not save image")
+        self.assertFalse(self.a.capturing)
+        self.assertTrue(self.a.capture_button.isEnabled())
+        self.assertTrue(self.a.save_button.isEnabled())
+        self.assertTrue(self.c.panel.isVisible())

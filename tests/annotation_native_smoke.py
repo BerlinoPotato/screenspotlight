@@ -3,13 +3,15 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import sys
+import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtCore import QEvent, QObject, QMimeData, QPoint, QPointF, QRectF, Qt
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QObject, QMimeData, QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QApplication, QToolTip, QWidget
+from PySide6.QtGui import QColor, QCursor, QImage
+from PySide6.QtWidgets import QApplication, QMessageBox, QToolTip, QWidget
 from spotlight import Spotlight
 
 
@@ -73,6 +75,27 @@ def main():
                     self.panel_resizes.append(widget.size())
                 return False
 
+        class NativeSurfaceEvents(QAbstractNativeEventFilter):
+            def __init__(self):
+                super().__init__()
+                self.windows = set()
+                self.layer_drops = []
+                self.proposed_drops = 0
+
+            def nativeEventFilter(self, event_type, message):
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.hWnd in self.windows and msg.message in (0x007C, 0x007D) and ctypes.c_ssize_t(msg.wParam).value == -20:
+                    styles = (wintypes.DWORD * 2).from_address(msg.lParam)
+                    if styles[0] & 0x80000 and not styles[1] & 0x80000:
+                        if msg.message == 0x007C:
+                            self.proposed_drops += 1
+                        else:
+                            self.layer_drops.append((msg.hWnd, styles[0], styles[1]))
+                return False, 0
+
+        native_watcher = NativeSurfaceEvents()
+        app.installNativeEventFilter(native_watcher)
+        native_watcher.windows.add(int(spotlight_overlay.winId()))
         watcher = SurfaceEvents()
         c.show_panel()
         QTest.qWait(80)
@@ -85,6 +108,7 @@ def main():
         assert not watcher.hidden, f"First tab switch hid a visible surface: {watcher.hidden}"
         a.overlay.installEventFilter(watcher)
         ink_id = int(a.overlay.winId())
+        native_watcher.windows.add(ink_id)
         spotlight_id = int(spotlight_overlay.winId())
         for index in (0, 1, 0, 1):
             c.panel.tabs.setCurrentIndex(index)
@@ -97,6 +121,9 @@ def main():
             assert c.panel.geometry() == panel_bounds, f"{tool} changed the shared control window size"
         assert not watcher.hidden, f"Tab switches hid a visible surface: {watcher.hidden}"
         assert not watcher.panel_resizes, f"Tab switches resized the controls: {watcher.panel_resizes}"
+        assert native_watcher.proposed_drops, "Native check did not exercise Qt's layered-surface reset"
+        assert not native_watcher.layer_drops, f"Input transitions dropped native overlay pixels: {native_watcher.layer_drops}"
+        app.removeNativeEventFilter(native_watcher)
         for widget in (c.panel, spotlight_overlay, a.overlay):
             widget.removeEventFilter(watcher)
         assert a.drawing and a.tool == "pen", "Opening Annotation must activate pen immediately"
@@ -132,6 +159,54 @@ def main():
         a.undo()
         assert a.marks[0].points == before_move, "Undo failed to restore the moved stroke"
         assert c.focus == original_area, "Moving annotations changed the spotlight area"
+        def confirm_screen_move(answer):
+            failures = []
+
+            def respond():
+                dialog = app.activeModalWidget()
+                try:
+                    assert isinstance(dialog, QMessageBox) and dialog.isVisible(), "Screen move lacks a visible confirmation"
+                    assert dialog.defaultButton() is dialog.button(QMessageBox.StandardButton.Cancel), "Screen move must default to Cancel"
+                    button = dialog.button(answer)
+                    point = button.mapTo(dialog, button.rect().center())
+                    assert hit(dialog, point) == int(dialog.winId()), "Confirmation is blocked by an overlay"
+                    dialog.grab().save(str(Path(__file__).resolve().parents[1] / "annotation-screen-confirm-preview.png"))
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                except Exception as error:
+                    failures.append(error)
+                    if dialog is not None:
+                        dialog.reject()
+
+            QTimer.singleShot(150, respond)
+            a.move_screen_button.click()
+            assert not failures, failures
+
+        # Exercise real cross-monitor and mixed-DPI moves without repinning ink.
+        pinned = a.screen
+        ink_bounds = a.overlay.geometry()
+        saved_panel_position = c.panel.pos()
+        saved_marks = list(a.marks)
+        saved_history, saved_future = list(a.history), list(a.future)
+        for other in (s for s in app.screens() if s != pinned):
+            c.panel.move(other.availableGeometry().topLeft() + QPoint(40, 40))
+            QTest.qWait(180)
+            assert c.panel.screen() == other, "Controls did not reach the test monitor"
+            a.set_tool("move")
+            QTest.mouseClick(a.overlay, Qt.MouseButton.LeftButton, pos=local + QPoint(60, 40))
+            c.geometry_changed()
+            assert a.screen == pinned and a.overlay.geometry() == ink_bounds, "Controls moved the annotation area"
+            assert a.marks == saved_marks and a.history == saved_history and a.future == saved_future, "Monitor/tool/selection change deleted ink or undo history"
+            assert a.move_screen_button.isEnabled(), "Explicit screen move unavailable"
+            confirm_screen_move(QMessageBox.StandardButton.Cancel)
+            assert a.screen == pinned and a.marks == saved_marks, "Cancel moved or cleared annotations"
+            confirm_screen_move(QMessageBox.StandardButton.Yes)
+            assert a.screen == other and a.overlay.geometry() == other.geometry(), "Confirmed move did not change screens"
+            assert a.marks == saved_marks and a.history == saved_history and a.future == saved_future, "Confirmed move lost ink/history"
+            c.panel.move(saved_panel_position)
+            QTest.qWait(180)
+            confirm_screen_move(QMessageBox.StandardButton.Yes)
+            assert a.screen == pinned and a.overlay.geometry() == ink_bounds
+        c.panel.move(saved_panel_position)
         a.interact()
         QTest.qWait(100)
         window = hit(target, QPoint(150, 140))
@@ -145,7 +220,7 @@ def main():
         c.show_panel()
         c.panel.move(origin)
         QTest.qWait(100)
-        a.copy_button.click()
+        a.capture_button.click()
         QTest.qWait(650)
         assert a.status.text() == "Copied to clipboard", a.status.text()
         assert app.clipboard().pixmap().toImage() == a.captured.toImage(), "Clipboard missed fresh capture"
@@ -157,6 +232,25 @@ def main():
         assert red.red() > 180 and red.green() < 100, f"Capture missed ink: {red.name()}"
         assert min(white.red(), white.green(), white.blue()) > 245, f"Controls leaked into capture: {white.name()}"
         assert image.width() == round(300 * ratio) and image.height() == round(200 * ratio)
+        # Save Image must capture the changed desktop, independent of Capture Image.
+        with tempfile.TemporaryDirectory(prefix="spotlight-native-save-") as folder:
+            saved_path = Path(folder) / "new capture.png"
+            target.setStyleSheet("background: #e8f0ff;")
+            QTest.qWait(100)
+            previous_clipboard = app.clipboard().pixmap().toImage()
+            with patch("annotations.QFileDialog.getSaveFileName", return_value=(str(saved_path), "PNG image (*.png)")) as dialog:
+                a.save_button.click()
+                assert a.capturing and not c.panel.isVisible(), "Save must take a new capture"
+                QTest.qWait(650)
+                dialog.assert_called_once()
+            assert a.status.text() == "Image saved", a.status.text()
+            saved_image = QImage(str(saved_path))
+            assert saved_image.size() == image.size(), "Saved crop has the wrong size"
+            saved_background = saved_image.pixelColor(round(150 * ratio), round(100 * ratio))
+            assert saved_background == QColor("#e8f0ff"), f"Save reused a stale capture: {saved_background.name()}"
+            assert app.clipboard().pixmap().toImage() == previous_clipboard, "Save changed clipboard contents"
+            assert a.capture_button.isEnabled() and a.save_button.isEnabled()
+            target.setStyleSheet("background: white;")
         c.panel.tabs.setCurrentIndex(1)
         c.panel.adjustSize()
         QTest.qWait(100)
@@ -212,6 +306,10 @@ def main():
         a.overlay.activateWindow()
         QTest.qWait(100)
         pen = a.tool_buttons["pen"]
+        pen_panel_point = pen.mapTo(c.panel, pen.rect().center())
+        assert hit(c.panel, pen_panel_point) == int(c.panel.winId()), "Ink or another window blocks native toolbar hover"
+        QCursor.setPos(origin + QPoint(150, 140))
+        QTest.qWait(100)
         QTest.mouseMove(pen, pen.rect().center())
         QTest.qWait(2000)
         assert QToolTip.isVisible() and QToolTip.text().startswith("Pen:"), (
@@ -228,7 +326,7 @@ def main():
                          pos=group.tool_menu.actionGeometry(action).center())
         assert a.tool == "filled_rectangle", "Native menu selection did not choose the filled tool"
         c.panel.grab().save(str(Path(__file__).resolve().parents[1] / "annotation-grouped-preview.png"))
-        print("PASS: Native drawing, grouped icon menus, laser-only cursor/restoration, moving marks, spotlight stability, constant tab geometry without hide events, both black palettes, fresh clipboard capture, controls exclusion, and layout")
+        print("PASS: Native drawing, grouped icon menus, laser-only cursor/restoration, moving marks, spotlight stability, constant tab geometry without native surface resets, pinned ink across real mixed-DPI monitors, confirmed screen moves, both black palettes, two image actions with fresh clipboard/file pixels, controls exclusion, and layout")
     finally:
         QCursor.setPos(saved_cursor)
         app.clipboard().setMimeData(saved_clipboard)
