@@ -1,22 +1,46 @@
 """Screen-space annotation tools and capture controls."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from math import atan2, cos, sin, pi
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QEasingCurve, QVariantAnimation
-from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRegion, QValidator
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QValidator
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QPushButton, QRadioButton, QSpinBox, QToolTip, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
 )
 
 
 PALETTES = (
-    ("#e53935", "#f58220", "#ffdc32", "#28b463", "#00bcd4", "#3265e8", "#a980ed"),
-    ("#f5a6a3", "#ffc49a", "#fff0a3", "#a5dfb5", "#a0e4ec", "#afc4fa", "#c8aff5"),
+    ("#e53935", "#f58220", "#ffdc32", "#28b463", "#00bcd4", "#3265e8", "#a980ed", "#212121"),
+    ("#f5a6a3", "#ffc49a", "#fff0a3", "#a5dfb5", "#a0e4ec", "#afc4fa", "#c8aff5", "#212121"),
 )
-COLOR_NAMES = ("Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple")
+COLOR_NAMES = ("Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "Black")
+
+
+TOOL_DESCRIPTIONS = {
+    "Pen": "Pen: draw freehand strokes",
+    "Highlighter": "Highlighter: draw translucent strokes",
+    "Horizontal highlighter": "Horizontal highlighter: drag a straight horizontal highlight; hold Shift for a vertical line",
+    "Laser pointer": "Laser pointer: show only a temporary laser dot; adjust Laser size and Color; clicks pass through; Esc or Pointer stops it",
+    "Filled rectangle": "Filled rectangle: drag a solid area in the selected color; hold Shift for a square",
+    "Filled circle": "Filled circle: drag a solid circle in the selected color",
+    "Arrow": "Arrow: drag to point at something",
+    "Rectangle": "Rectangle: drag to outline an area; hold Shift for a square",
+    "Circle": "Circle: drag to circle an area",
+    "Number": "Numbered marker: click to place the next number",
+    "Letter": "Lettered marker: click to place the next letter",
+    "Eraser": "Eraser: click an annotation to remove it",
+    "Move annotations": "Move annotations: drag a mark to move it; click to select, then use arrows (Shift for 10 pixels)",
+    "Undo": "Undo: reverse the last annotation change",
+    "Redo": "Redo: restore the last undone change",
+    "Clear annotations": "Clear annotations: erase all marks",
+    "Interact with desktop": "Interact with desktop: stop drawing and use the app underneath; keep annotations visible",
+    "Capture screen": "Capture: capture the chosen area with annotations",
+    "Capture and copy": "Capture and copy: take a fresh capture of the chosen area and copy it directly to the clipboard",
+    "Save PNG": "Save the latest capture as a PNG image (capture first)",
+}
 
 
 class ThinArrow(QPushButton):
@@ -215,9 +239,9 @@ class Mark:
         rect = QRectF(start, end).normalized()
         if self.tool in ("number", "letter"):
             path.addEllipse(start, self.size / 2, self.size / 2)
-        elif self.tool == "rectangle":
+        elif self.tool in ("rectangle", "filled_rectangle"):
             path.addRect(rect)
-        elif self.tool == "circle":
+        elif self.tool in ("circle", "filled_circle"):
             path.addEllipse(rect)
         else:
             path.moveTo(start)
@@ -233,20 +257,26 @@ class Mark:
                     path.lineTo(end - QPointF(cos(angle + offset) * length, sin(angle + offset) * length))
         return path
 
-    def hit(self, point):
+    def translated(self, delta):
+        return replace(self, points=[point + delta for point in self.points])
+
+    def hit(self, point, interior=False):
         path = self.path()
         stroke = QPainterPathStroker()
         stroke.setWidth(max(12, self.width))
-        return stroke.createStroke(path).contains(point) or (bool(self.label) and path.contains(point))
+        return stroke.createStroke(path).contains(point) or (
+            (bool(self.label) or self.tool in ("filled_rectangle", "filled_circle") or (
+                interior and self.tool in ("rectangle", "circle"))) and path.contains(point))
 
     def paint(self, painter):
         painter.save()
         color = QColor(self.color)
-        if self.tool == "highlighter":
+        if self.tool in ("highlighter", "horizontal_highlighter"):
             color.setAlpha(90)
         painter.setPen(QPen(color, self.width, Qt.PenStyle.SolidLine,
                             Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.setBrush(color if self.label else Qt.BrushStyle.NoBrush)
+        painter.setBrush(color if self.label or self.tool in ("filled_rectangle", "filled_circle")
+                         else Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path())
         if self.label:
             luminance = color.redF() * .2126 + color.greenF() * .7152 + color.blueF() * .0722
@@ -264,29 +294,90 @@ class Mark:
         painter.restore()
 
 
+def set_overlay_flags(widget, flags):
+    """Update a visible native overlay without QWidget's hide/show transition."""
+    window = widget.windowHandle()
+    if widget.isVisible() and window is not None and QApplication.platformName() == "windows":
+        window.setFlags(flags)
+    else:
+        widget.setWindowFlags(flags)
+
+
 class InkOverlay(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
         self.pending = None
+        self.reset_edit()
+        self.laser_point = None
+        self.laser_timer = QTimer(self)
+        self.laser_timer.setInterval(16)
+        self.laser_timer.timeout.connect(self.track_laser)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         self.setWindowTitle("Screen Spotlight annotations")
 
     def present(self, drawing):
         self.pending = None
+        self.reset_edit()
+        self.stop_laser()
+        laser = drawing and self.owner.tool == "laser"
         flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
-        if not drawing:
+        if not drawing or laser:
             flags |= Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus
-        self.setWindowFlags(flags)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not drawing)
+        set_overlay_flags(self, flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not drawing or laser)
         self.setGeometry(self.owner.screen.geometry())
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor if self.owner.tool == "move" else Qt.CursorShape.CrossCursor)
         self.sync_controls_mask()
         self.show()
         self.raise_()
-        if drawing:
+        if laser:
+            self.laser_timer.start()
+            self.track_laser()
+        elif drawing:
             self.activateWindow()
             self.setFocus()
+
+    def stop_laser(self):
+        self.owner.controller.system_cursor.restore()
+        self.laser_timer.stop()
+        self.laser_point = None
+        self.update()
+
+    def hideEvent(self, event):
+        self.stop_laser()
+        super().hideEvent(event)
+
+    def track_laser(self):
+        if not self.owner.drawing or self.owner.tool != "laser":
+            self.stop_laser()
+            return
+        point = self.mapFromGlobal(QCursor.pos())
+        point = QPointF(point) if self.rect().contains(point) and self.mask().contains(point) else None
+        # Repaint only the old and new glow bounds, including live size changes.
+        radius = self.owner.laser_size.maximum()
+        previous = self.laser_point
+        self.laser_point = point
+        self.owner.controller.system_cursor.set_hidden(point is not None)
+        for position in (previous, point):
+            if position is not None:
+                self.update(QRectF(position.x() - radius, position.y() - radius,
+                                   radius * 2, radius * 2).toAlignedRect())
+
+    def paint_laser(self, painter):
+        if self.laser_point is None:
+            return
+        color = QColor(PALETTES[self.owner.variant.checkedId()][self.owner.color])
+        radius = self.owner.laser_size.value() / 2
+        glow = QRadialGradient(self.laser_point, radius * 1.8)
+        glow.setColorAt(0, QColor("white"))
+        glow.setColorAt(.22, color.lighter(150))
+        glow.setColorAt(.5, color)
+        glow.setColorAt(1, QColor(color.red(), color.green(), color.blue(), 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(self.laser_point, radius * 1.8, radius * 1.8)
 
     def sync_controls_mask(self):
         panel = self.owner.controller.panel
@@ -308,18 +399,61 @@ class InkOverlay(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 1 if self.owner.drawing else 0))
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1 if self.owner.drawing and self.owner.tool != "laser" else 0))
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         for mark in self.owner.marks:
             mark.paint(painter)
         if self.pending:
             self.pending.paint(painter)
+        self.paint_laser(painter)
+        if self.owner.drawing and self.owner.tool == "move" and self.selected_index is not None:
+            bounds = self.owner.marks[self.selected_index].path().boundingRect().adjusted(-5, -5, 5, 5)
+            painter.setPen(QPen(QColor("#3265e8"), 1.2, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(bounds)
+
+    def reset_edit(self):
+        self.selected_index = None
+        self.move_start = None
+        self.move_original = None
+        self.move_saved = False
+        self.update()
+
+    def mark_at(self, point):
+        return next((i for i in range(len(self.owner.marks) - 1, -1, -1)
+                     if self.owner.marks[i].hit(point, interior=True)), None)
+
+    def constrain_delta(self, mark, delta):
+        bounds = mark.path().boundingRect()
+        return QPointF(max(-bounds.left(), min(delta.x(), self.width() - bounds.right())),
+                       max(-bounds.top(), min(delta.y(), self.height() - bounds.bottom())))
+
+    def drag_mark(self, point):
+        requested = point - self.move_start
+        delta = self.constrain_delta(self.move_original, requested) if not requested.isNull() else QPointF()
+        if not delta.isNull() or self.move_saved:
+            if not self.move_saved:
+                self.owner.remember()
+                self.move_saved = True
+            self.owner.marks[self.selected_index] = self.move_original.translated(delta)
+            self.update()
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton or not self.owner.drawing:
             return
         owner = self.owner
+        if owner.tool == "laser":
+            return
         point = event.position()
+        if owner.tool == "move":
+            self.selected_index = self.mark_at(point)
+            if self.selected_index is not None:
+                self.move_start = QPointF(point)
+                self.move_original = owner.marks[self.selected_index]
+                self.move_saved = False
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.update()
+            return
         if owner.tool == "eraser":
             for i in range(len(owner.marks) - 1, -1, -1):
                 if owner.marks[i].hit(point):
@@ -340,13 +474,26 @@ class InkOverlay(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
+        if self.owner.drawing and self.owner.tool == "move":
+            if self.move_start is not None:
+                self.drag_mark(event.position())
+            else:
+                self.setCursor(Qt.CursorShape.OpenHandCursor if self.mark_at(event.position()) is not None
+                               else Qt.CursorShape.ArrowCursor)
+            return
         if self.pending:
             point = event.position()
             point = QPointF(max(0, min(point.x(), self.width())), max(0, min(point.y(), self.height())))
             if self.pending.tool in ("pen", "highlighter"):
                 self.pending.points.append(point)
             else:
-                if self.pending.tool == "circle":
+                if self.pending.tool == "horizontal_highlighter":
+                    start = self.pending.points[0]
+                    point = (QPointF(start.x(), point.y()) if event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                             else QPointF(point.x(), start.y()))
+                elif self.pending.tool in ("circle", "filled_circle") or (
+                        self.pending.tool in ("rectangle", "filled_rectangle") and
+                        event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
                     start = self.pending.points[0]
                     delta = point - start
                     side = min(abs(delta.x()), abs(delta.y()))
@@ -356,6 +503,12 @@ class InkOverlay(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.move_start is not None:
+            self.drag_mark(event.position())
+            self.move_start = self.move_original = None
+            self.move_saved = False
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            return
         if event.button() == Qt.MouseButton.LeftButton and self.pending:
             self.mouseMoveEvent(event)
             self.owner.remember()
@@ -368,6 +521,17 @@ class InkOverlay(QWidget):
             self.owner.controller.escape()
         elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.owner.interact()
+        elif self.owner.tool == "move" and self.selected_index is not None and event.key() in (
+                Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            step = 10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
+            dx, dy = {Qt.Key.Key_Left: (-step, 0), Qt.Key.Key_Right: (step, 0),
+                      Qt.Key.Key_Up: (0, -step), Qt.Key.Key_Down: (0, step)}[event.key()]
+            mark = self.owner.marks[self.selected_index]
+            delta = self.constrain_delta(mark, QPointF(dx, dy))
+            if not delta.isNull():
+                self.owner.remember()
+                self.owner.marks[self.selected_index] = mark.translated(delta)
+                self.update()
         elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if event.key() == Qt.Key.Key_Z:
                 self.owner.undo()
@@ -379,6 +543,7 @@ class IconButton(QPushButton):
     """Show hover help even while the separate drawing window owns focus."""
     def __init__(self):
         super().__init__()
+        self.tool_menu = None
         self.hover_timer = QTimer(self)
         self.hover_timer.setSingleShot(True)
         self.hover_timer.setInterval(450)
@@ -396,7 +561,47 @@ class IconButton(QPushButton):
     def mousePressEvent(self, event):
         self.hover_timer.stop()
         QToolTip.hideText()
+        if self.tool_menu and (event.button() == Qt.MouseButton.RightButton or (
+                event.button() == Qt.MouseButton.LeftButton and event.position().x() >= self.width() - 20)):
+            self.show_tool_menu()
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def show_tool_menu(self):
+        self.hover_timer.stop()
+        QToolTip.hideText()
+        self.tool_menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def contextMenuEvent(self, event):
+        if self.tool_menu:
+            if not self.tool_menu.isVisible():
+                self.show_tool_menu()
+            event.accept()
+        else:
+            super().contextMenuEvent(event)
+
+    def keyPressEvent(self, event):
+        if self.tool_menu and (event.key() == Qt.Key.Key_Menu or (
+                event.key() == Qt.Key.Key_F10 and event.modifiers() & Qt.KeyboardModifier.ShiftModifier) or (
+                event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier)):
+            self.show_tool_menu()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.tool_menu:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor("#737783"), 1.2, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            x, y = self.width() - 12, self.height() / 2
+            path = QPainterPath(QPointF(x - 3, y - 1.5))
+            path.lineTo(x, y + 1.5)
+            path.lineTo(x + 3, y - 1.5)
+            painter.drawPath(path)
 
     def show_hover_help(self):
         if self.isVisible() and self.underMouse():
@@ -416,6 +621,7 @@ class AnnotationTools(QWidget):
         self.history = []
         self.future = []
         self.captured = QPixmap()
+        self.capturing = False
         self.overlay = InkOverlay(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 10, 0, 0)
@@ -426,26 +632,65 @@ class AnnotationTools(QWidget):
         grid = QGridLayout()
         self.tools = QButtonGroup(self)
         self.tool_buttons = {}
-        for i, (name, filename) in enumerate([
-            ("pen", "02 Pen.png"), ("highlighter", "03 Highlighter.png"),
-            ("arrow", "04 Arrow.png"), ("rectangle", "05 Rectangle.png"),
-            ("circle", "06 Circle.png"), ("number", "07 Numbered Marker.png"),
-            ("letter", "08 Lettered Marker.png"), ("eraser", "09 Eraser.png"),
-        ]):
-            button = self.button(name.title(), filename, lambda checked=False, tool=name: self.set_tool(tool))
+        self.tool_actions = {}
+        self.tool_specs = {
+            "pen": ("Pen", "02 Pen.png"),
+            "move": ("Move annotations", "13 Mouse Pointer.png"),
+            "highlighter": ("Highlighter", "03 Highlighter.png"),
+            "horizontal_highlighter": ("Horizontal highlighter", "21 Horizontal Highlighter.png"),
+            "laser": ("Laser pointer", "22 Laser Pointer.png"),
+            "arrow": ("Arrow", "04 Arrow.png"),
+            "rectangle": ("Rectangle", "05 Rectangle.png"),
+            "filled_rectangle": ("Filled rectangle", "23 Filled Rectangle.png"),
+            "circle": ("Circle", "06 Circle.png"),
+            "filled_circle": ("Filled circle", "24 Filled Circle.png"),
+            "number": ("Number", "07 Numbered Marker.png"),
+            "letter": ("Letter", "08 Lettered Marker.png"),
+            "eraser": ("Eraser", "09 Eraser.png"),
+        }
+        groups = (("pen",), ("highlighter", "horizontal_highlighter"), ("laser",), ("arrow",),
+                  ("rectangle", "filled_rectangle"), ("circle", "filled_circle"), ("number", "letter"), ("eraser",))
+        for i, names in enumerate(groups):
+            name = names[0]
+            label, filename = self.tool_specs[name]
+            button = self.button(label, filename, lambda checked=False, key=name: self.set_tool(self.tool_buttons[key].tool))
+            button.tool = name
             button.setCheckable(True)
             button.setChecked(name == self.tool)
             self.tools.addButton(button)
-            self.tool_buttons[name] = button
+            for name in names:
+                self.tool_buttons[name] = button
+            if len(names) > 1:
+                button.tool_menu = QMenu(button)
+                button.tool_menu.setStyleSheet(
+                    "QMenu { background: white; color: #454551; border: 1px solid #d8dce4; padding: 5px; }"
+                    "QMenu::item { padding: 9px 20px 9px 8px; }"
+                    "QMenu::item:selected { background: #eef0f4; border-radius: 6px; }")
+                for name in names:
+                    label, filename = self.tool_specs[name]
+                    action = button.tool_menu.addAction(tool_icon(filename), label)
+                    action.setCheckable(True)
+                    action.setChecked(name == button.tool)
+                    action.triggered.connect(lambda checked=False, tool=name: self.set_tool(tool))
+                    self.tool_actions[name] = action
+                button.setToolTip(button.toolTip() + "; right-click or use the arrow for more tools")
+                button.setAccessibleDescription("More tools: right-click, dropdown arrow, or Alt+Down")
             grid.addWidget(button, i // 4, i % 4)
         tools_layout.addLayout(grid)
         row = QHBoxLayout()
         for label, filename, action in [
             ("Undo", "10 Undo.png", self.undo), ("Redo", "11 Redo.png", self.redo),
             ("Clear annotations", "12 Clear Annotations.png", self.clear),
+            ("Move annotations", "13 Mouse Pointer.png", lambda: self.set_tool("move")),
             ("Interact with desktop", "13 Mouse Pointer.png", self.interact),
         ]:
-            row.addWidget(self.button(label, filename, action))
+            button = self.button(label, filename, action)
+            if label == "Move annotations":
+                button.setText("Move")
+                button.setCheckable(True)
+                self.tools.addButton(button)
+                self.tool_buttons["move"] = button
+            row.addWidget(button)
         tools_layout.addLayout(row)
         color_box = QGroupBox("Color")
         color_layout = QVBoxLayout(color_box)
@@ -495,6 +740,11 @@ class AnnotationTools(QWidget):
         self.size = SlimSpinBox()
         self.size.setRange(20, 120)
         self.size.setValue(40)
+        self.laser_size = SlimSpinBox()
+        self.laser_size.setRange(4, 80)
+        self.laser_size.setValue(16)
+        self.laser_size.setAccessibleName("Laser size")
+        self.laser_size.setToolTip("Laser dot diameter in pixels")
         self.sequence = MarkerSequence()
         self.sequence.setRange(1, 999999)
         self.sequence_label = QLabel("Next")
@@ -504,10 +754,14 @@ class AnnotationTools(QWidget):
             cell = QVBoxLayout()
             cell.setSpacing(0)
             caption = QLabel(label)
+            if widget is self.size:
+                self.marker_size_label = caption
             caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
             widget.setAccessibleName(label)
             cell.addWidget(caption)
             cell.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
+            if widget is self.size:
+                cell.addWidget(self.laser_size, alignment=Qt.AlignmentFlag.AlignCenter)
             row.addLayout(cell, index // 2, index % 2)
         row.setColumnStretch(0, 1)
         row.setColumnStretch(1, 1)
@@ -531,6 +785,11 @@ class AnnotationTools(QWidget):
         extra.addStretch()
         row.addLayout(extra, 3, 0, 1, 2)
         settings_layout.addWidget(self.settings_row)
+        # Reserve the marker controls' row so tools and tabs share one stable size.
+        for widget in (self.sequence, self.sequence_label, self.sequence_divider):
+            policy = widget.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            widget.setSizePolicy(policy)
         self.update_settings()
         capture_box = QGroupBox("Capture")
         capture_layout = QVBoxLayout(capture_box)
@@ -552,10 +811,10 @@ class AnnotationTools(QWidget):
             row.addWidget(button)
         capture_layout.addWidget(self.capture_control)
         row = QHBoxLayout()
-        row.addWidget(self.button("Capture screen", "15 Capture Screen.png", self.capture))
-        self.copy_button = self.button("Copy to clipboard", "16 Copy to Clipboard.png", self.copy)
+        self.capture_button = self.button("Capture screen", "15 Capture Screen.png", self.capture)
+        row.addWidget(self.capture_button)
+        self.copy_button = self.button("Capture and copy", "16 Copy to Clipboard.png", self.capture_and_copy)
         self.save_button = self.button("Save PNG", "17 Save Image.png", self.save)
-        self.copy_button.setEnabled(False)
         self.save_button.setEnabled(False)
         row.addWidget(self.copy_button)
         row.addWidget(self.save_button)
@@ -567,51 +826,58 @@ class AnnotationTools(QWidget):
 
     def button(self, label, filename, action):
         button = IconButton()
-        if label in ("Capture screen", "Copy to clipboard", "Save PNG"):
-            button.setText({"Capture screen": "Capture", "Copy to clipboard": "Copy", "Save PNG": "Save PNG"}[label])
+        if label in ("Capture screen", "Capture and copy", "Save PNG"):
+            button.setText({"Capture screen": "Capture", "Capture and copy": "Capture && Copy", "Save PNG": "Save PNG"}[label])
         else:
             button.setIcon(tool_icon(filename))
         button.setIconSize(QSize(27, 27))
         button.setFixedHeight(38)
         button.setMinimumWidth(52)
-        descriptions = {
-            "Pen": "Pen: draw freehand strokes",
-            "Highlighter": "Highlighter: draw translucent strokes",
-            "Arrow": "Arrow: drag to point at something",
-            "Rectangle": "Rectangle: drag to outline an area",
-            "Circle": "Circle: drag to circle an area",
-            "Number": "Numbered marker: click to place the next number",
-            "Letter": "Lettered marker: click to place the next letter",
-            "Eraser": "Eraser: click an annotation to remove it",
-            "Undo": "Undo: reverse the last annotation change",
-            "Redo": "Redo: restore the last undone change",
-            "Clear annotations": "Clear annotations: erase all marks",
-            "Interact with desktop": "Interact with desktop: stop drawing and use the app underneath; keep annotations visible",
-            "Capture screen": "Capture: capture the chosen area with annotations",
-            "Copy to clipboard": "Copy the latest capture to the clipboard (capture first)",
-            "Save PNG": "Save the latest capture as a PNG image (capture first)",
-        }
-        button.setToolTip(descriptions.get(label, label))
+        button.setToolTip(TOOL_DESCRIPTIONS.get(label, label))
         button.setAccessibleName(label)
         button.clicked.connect(action)
 
         return button
 
     def set_tool(self, tool):
+        was_laser = self.tool == "laser"
+        self.overlay.pending = None
+        self.overlay.reset_edit()
         if self.tool in ("arrow", "rectangle", "circle"):
             self.tool_widths[self.tool] = self.shape_width.value()
         self.tool = tool
         if tool in ("arrow", "rectangle", "circle"):
             self.shape_width.setValue(self.tool_widths.get(tool, 4))
-        self.tool_buttons[tool].setChecked(True)
+        button = self.tool_buttons[tool]
+        button.tool = tool
+        button.setChecked(True)
+        label, filename = self.tool_specs[tool]
+        button.setIcon(tool_icon(filename))
+        button.setAccessibleName(label)
+        button.setToolTip(TOOL_DESCRIPTIONS[label] + (
+            "; right-click or use the arrow for more tools" if button.tool_menu else ""))
+        if button.tool_menu:
+            for action in button.tool_menu.actions():
+                action.setChecked(action is self.tool_actions[tool])
+        self.overlay.setCursor(Qt.CursorShape.ArrowCursor if tool == "move" else Qt.CursorShape.CrossCursor)
         self.update_settings()
         self.start()
+        if was_laser != (tool == "laser"):
+            self.overlay.present(True)
+            self.controller.panel.raise_()
 
     @property
     def width(self):
-        return {"pen": self.pen_width, "highlighter": self.highlighter_width}.get(self.tool, self.shape_width)
+        return {"pen": self.pen_width, "highlighter": self.highlighter_width,
+                "horizontal_highlighter": self.highlighter_width}.get(self.tool, self.shape_width)
 
     def update_settings(self):
+        laser = self.tool == "laser"
+        # Hide the outgoing control first: showing both even briefly raises the
+        # top-level window's minimum height, which Qt does not shrink afterward.
+        (self.size if laser else self.laser_size).hide()
+        (self.laser_size if laser else self.size).show()
+        self.marker_size_label.setText("Laser size" if laser else "Marker size")
         marker = self.tool in ("number", "letter")
         for widget in (self.sequence, self.sequence_label, self.sequence_divider):
             widget.setVisible(marker)
@@ -642,6 +908,7 @@ class AnnotationTools(QWidget):
 
     def undo(self):
         self.overlay.pending = None
+        self.overlay.reset_edit()
         if self.history:
             self.future.append((list(self.marks), self.sequence.value()))
             self.marks, value = self.history.pop()
@@ -650,6 +917,7 @@ class AnnotationTools(QWidget):
 
     def redo(self):
         self.overlay.pending = None
+        self.overlay.reset_edit()
         if self.future:
             self.history.append((list(self.marks), self.sequence.value()))
             self.marks, value = self.future.pop()
@@ -658,6 +926,7 @@ class AnnotationTools(QWidget):
 
     def clear(self):
         self.overlay.pending = None
+        self.overlay.reset_edit()
         if self.marks:
             self.remember()
             self.marks = []
@@ -667,6 +936,7 @@ class AnnotationTools(QWidget):
     def reset_screen(self):
         self.drawing = False
         self.overlay.pending = None
+        self.overlay.reset_edit()
         self.overlay.hide()
         if self.controller.mode == "off":
             self.controller.disarm_escape()
@@ -681,13 +951,14 @@ class AnnotationTools(QWidget):
         c = self.controller
         target = c.selected_screen or c.panel.screen()
         if self.drawing and self.screen == target:
-            self.status.setText(f"{self.tool.title()} active")
+            self.status.setText(f"{self.tool_specs[self.tool][0]} active")
             return
         if self.screen and self.screen != target:
             self.reset_screen()
         self.screen = target
         if not c.focus.isEmpty():
-            c.activate("present", keep_controls=True)
+            if c.mode != "present":
+                c.activate("present", keep_controls=True)
         elif c.mode != "off":
             c.clear()
         c.panel.information.hide()
@@ -697,7 +968,7 @@ class AnnotationTools(QWidget):
         self.overlay.present(True)
         c.panel.raise_()
         self.overlay.sync_controls_mask()
-        self.status.setText(f"{self.tool.title()} active")
+        self.status.setText(f"{self.tool_specs[self.tool][0]} active")
 
     def interact(self):
         self.drawing = False
@@ -708,11 +979,21 @@ class AnnotationTools(QWidget):
             self.controller.disarm_escape()
         self.status.setText("Desktop interaction")
 
-    def capture(self):
+    def capture_and_copy(self):
+        self.capture(copy_to_clipboard=True)
+
+    def capture(self, copy_to_clipboard=False):
+        if self.capturing:
+            return
+        self.capturing = True
+        self.capture_button.setEnabled(False)
+        self.copy_button.setEnabled(False)
+        self.save_button.setEnabled(False)
         c = self.controller
         self.sync_capture_scope()
         if not c.focus.isEmpty():
-            c.activate("present", keep_controls=True)
+            if c.mode != "present":
+                c.activate("present", keep_controls=True)
         elif c.mode != "off":
             c.clear()
         self.interact()
@@ -722,9 +1003,9 @@ class AnnotationTools(QWidget):
         c.panel.hide()
         self.status.setText("Capturing...")
         # Let the compositor remove our controls before reading desktop pixels.
-        QTimer.singleShot(250, lambda: self.finish_capture(screen, crop))
+        QTimer.singleShot(250, lambda: self.finish_capture(screen, crop, copy_to_clipboard))
 
-    def finish_capture(self, screen, crop):
+    def finish_capture(self, screen, crop, copy_to_clipboard=False):
         try:
             if screen not in self.controller.app.screens():
                 raise RuntimeError("The selected monitor is no longer available.")
@@ -735,13 +1016,21 @@ class AnnotationTools(QWidget):
             ratio = pixmap.devicePixelRatio()
             physical = QRect(round(local.x() * ratio), round(local.y() * ratio),
                              round(local.width() * ratio), round(local.height() * ratio))
-            self.captured = pixmap.copy(physical.intersected(pixmap.rect()))
-            self.copy_button.setEnabled(True)
-            self.save_button.setEnabled(True)
-            self.status.setText(f"Captured {self.captured.width()} x {self.captured.height()} pixels")
+            captured = pixmap.copy(physical.intersected(pixmap.rect()))
+            if captured.isNull():
+                raise RuntimeError("The capture area is outside the selected monitor.")
+            self.captured = captured
+            if copy_to_clipboard:
+                self.copy()
+            else:
+                self.status.setText(f"Captured {self.captured.width()} x {self.captured.height()} pixels")
         except Exception as error:
             self.status.setText(str(error))
         finally:
+            self.capturing = False
+            self.capture_button.setEnabled(True)
+            self.copy_button.setEnabled(True)
+            self.save_button.setEnabled(not self.captured.isNull())
             self.controller.show_panel()
 
     def copy(self):

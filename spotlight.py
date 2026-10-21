@@ -8,11 +8,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from emergency import EmergencyExit
-from annotations import AnnotationTools, tool_icon
+from emergency import EmergencyExit, SystemCursor
+from annotations import AnnotationTools, tool_icon, set_overlay_flags
 
 from PySide6.QtCore import (
-    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, Qt, QTimer, QVariantAnimation, QEasingCurve,
+    QAbstractNativeEventFilter, QLockFile, QPointF, QRectF, QSettings, QSize, QSizeF, Qt, QTimer, QVariantAnimation, QEasingCurve,
 )
 from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QRegion, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.32"
+APP_VERSION = "0.1.35"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -142,7 +142,7 @@ class Overlay(QWidget):
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
         if not editing:
             flags |= Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus
-        self.setWindowFlags(flags)
+        set_overlay_flags(self, flags)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not editing)
         self.setGeometry(self.screen_ref.geometry())
         self.sync_controls_mask()
@@ -364,10 +364,11 @@ class FullWidthTabs(QTabWidget):
         self.setTabBar(SlidingTabBar())
 
     def sizeHint(self):
-        page = self.currentWidget()
-        if page is None:
+        if not self.count():
             return super().sizeHint()
-        size = page.sizeHint()
+        size = QSize()
+        for index in range(self.count()):
+            size = size.expandedTo(self.widget(index).sizeHint())
         return QSize(size.width(), size.height() + self.tabBar().sizeHint().height() + 8)
 
     def minimumSizeHint(self):
@@ -493,6 +494,7 @@ class Panel(QWidget):
         for section_layout in (shape_row, dim_layout, layout):
             section_layout.setContentsMargins(16, 12, 16, 14)
 
+        spotlight_layout.addStretch()
         layout = outer_layout
         self.status = controller.annotations.status
         self.status.setText("Ready — select an area to begin.")
@@ -518,6 +520,12 @@ class Panel(QWidget):
             "Annotation: click a tool to start drawing. Controls stay available.\n"
             "Esc / Enter ends drawing and keeps the marks.\n"
             "Ctrl+Z / Ctrl+Y undoes / redoes while drawing.\n"
+            "Move: drag any mark; click then use arrows (Shift = 10 pixels).\n"
+            "Right-click a grouped tool or use its arrow to see variants with icons.\n"
+            "Horizontal highlighter: Shift makes the line vertical.\n"
+            "Rectangle / filled rectangle: Shift makes a square.\n"
+            "Laser: dot only; cursor returns over controls and when laser stops.\n"
+            "Esc or Pointer stops the laser. Capture & Copy captures in one click.\n"
             "Capture defaults to the spotlight area, or the monitor if no area exists.\n\n"
             "While editing: arrows move; Shift+arrows move faster.\n"
             "R / C changes shape; + / minus adjusts dimming.\n\n"
@@ -627,13 +635,17 @@ class Panel(QWidget):
         for button in self.dim_buttons.values():
             button.ensurePolished()
             button.setMinimumWidth(button.sizeHint().width())
+        # Include initially hidden tools when measuring the shared panel size.
+        self.ensurePolished()
+        for widget in self.findChildren(QWidget):
+            widget.ensurePolished()
+        # Reserve two status lines so changing activity text cannot resize the panel.
+        self.status.ensurePolished()
+        self.status.setMinimumHeight(self.status.fontMetrics().lineSpacing() * 2 + 16)
         self.tabs.currentChanged.connect(self.tab_changed)
         self.resize(self.minimumWidth(), self.sizeHint().height())
 
     def tab_changed(self, index):
-        self.tabs.updateGeometry()
-        self.layout().activate()
-        self.resize(self.width(), self.sizeHint().height())
         annotations = self.controller.annotations
         annotations.sync_capture_scope()
         if index == 0:
@@ -678,6 +690,7 @@ class Spotlight:
         self.overlays = []
         self.connected_screens = set()
         self.hotkey_errors = []
+        self.system_cursor = SystemCursor(enabled=app.platformName() == "windows")
         self.panel = Panel(self)
         self.panel.installEventFilter(self.annotations.overlay)
         self.icon = app_icon()
@@ -694,7 +707,7 @@ class Spotlight:
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         self.hotkeys = Hotkeys(self) if native_hotkeys else None
-        self.emergency = EmergencyExit() if native_hotkeys else None
+        self.emergency = EmergencyExit(cleanup=self.system_cursor.restore) if native_hotkeys else None
         if self.emergency:
             self.emergency.start()
         self.escape_timer = QTimer(self.panel)
@@ -719,26 +732,64 @@ class Spotlight:
         app.aboutToQuit.connect(self.shutdown)
 
     def rebuild_overlays(self):
-        for overlay in self.overlays:
-            overlay.close()
-            overlay.deleteLater()
-        self.overlays = [Overlay(self, screen) for screen in self.app.screens()]
-        for screen in self.app.screens():
+        screens = self.app.screens()
+        existing = {overlay.screen_ref: overlay for overlay in self.overlays}
+        for screen, overlay in existing.items():
+            if screen not in screens:
+                overlay.close()
+                overlay.deleteLater()
+        self.overlays = [existing[screen] if screen in existing else Overlay(self, screen) for screen in screens]
+        for screen in screens:
             if screen not in self.connected_screens:
                 screen.geometryChanged.connect(self.geometry_changed)
                 self.connected_screens.add(screen)
         self.connected_screens.intersection_update(self.app.screens())
 
     def geometry_changed(self, *_):
-        self.annotations.reset_screen()
-        self.clear()
+        screens = self.app.screens()
+        if self.selected_screen is not None and self.selected_screen not in screens:
+            self.annotations.reset_screen()
+            self.clear()
+            return
+        selected_overlay = next((o for o in self.overlays if o.screen_ref == self.selected_screen), None)
+        if selected_overlay is not None and not self.focus.isEmpty():
+            old = selected_overlay.geometry()
+            bounds = self.selected_screen.geometry()
+            if old != bounds:
+                # A layout notification must not delete a valid area. Translate its
+                # monitor-relative position, then fit it within the new bounds.
+                rect = QRectF(self.focus).translated(QPointF(bounds.topLeft() - old.topLeft()))
+                width = min(rect.width(), bounds.width())
+                height = min(rect.height(), bounds.height())
+                if self.shape == "Circle":
+                    width = height = min(width, height)
+                rect.setSize(QSizeF(width, height))
+                self.focus = move_rect(rect, QPointF(), QRectF(bounds))
+        annotation_screen = self.annotations.screen
+        if annotation_screen is not None:
+            if annotation_screen not in screens or self.annotations.overlay.geometry() != annotation_screen.geometry():
+                self.annotations.reset_screen()
         for overlay in self.overlays:
-            overlay.setGeometry(overlay.screen_ref.geometry())
+            if overlay.screen_ref not in screens:
+                continue
+            bounds = overlay.screen_ref.geometry()
+            if overlay.geometry() != bounds:
+                overlay.drag_start = overlay.drag_kind = None
+                overlay.setGeometry(bounds)
+                overlay.sync_controls_mask()
+        self.repaint()
 
     def screens_changed(self, *_):
-        self.annotations.reset_screen()
-        self.clear()
+        # Connecting or removing an unrelated monitor must not clear this monitor.
+        self.geometry_changed()
+        existing = set(self.overlays)
         self.rebuild_overlays()
+        if self.mode != "off":
+            for overlay in self.overlays:
+                if overlay not in existing:
+                    overlay.present()
+        self.annotations.overlay.sync_controls_mask()
+        self.repaint()
 
     def tray_activated(self, reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -912,6 +963,7 @@ class Spotlight:
 
     def shutdown(self):
         self.annotations.overlay.hide()
+        self.system_cursor.close()
         self.escape_timer.stop()
         self.interaction_timer.stop()
         if self.emergency:

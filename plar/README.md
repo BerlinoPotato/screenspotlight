@@ -1,6 +1,12 @@
 # Screen Spotlight for PLAR
 
-This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.32 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
+This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.35 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
+
+The annotation toolbar groups highlighter, rectangle, circle, and marker variants. Right-click a grouped button, click its dropdown arrow, or press Alt+Down while focused to choose by icon and name. Left-click reuses the group's last choice. The horizontal highlighter uses Shift for vertical strokes; rectangles use Shift for squares. Filled shapes use the selected palette color. The laser dot follows the mouse while hiding the normal cursor, which returns over the controls or when laser mode ends. The laser allows desktop clicks, uses the Color palette and its own Laser size value, and disappears on Esc, Pointer, or capture. **Capture & Copy** captures a fresh image directly to the clipboard in one click; **Save PNG** saves the latest successful capture.
+
+**Move** lets you drag any mark, or click one and use arrows (Shift for 10 pixels). A dashed box identifies the selection; each drag is one Undo step. Spotlight areas now survive unchanged display notifications, including while moving/resizing; actual geometry changes fit the area within its monitor. Removing unrelated monitors preserves the selected area.
+
+Spotlight and Annotation share one stable control-window size. Visible screen layers stay visible while switching tabs. Both Normal and Pastel have eight colors, with the same neutral black (`#212121`) as the last swatch.
 
 ## In PLAR
 

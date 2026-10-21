@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import subprocess
 import sys
 
-from emergency import EmergencyExit
+from emergency import EmergencyExit, SystemCursor
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import QImage
@@ -363,12 +363,71 @@ class AppTests(unittest.TestCase):
         self.assertEqual(image.pixelColor(200, 200).alpha(), 0)
         self.assertGreater(image.pixelColor(121, 121).alpha(), 120)
 
-    def test_monitor_geometry_change_clears_overlay(self):
+    def test_unchanged_geometry_notification_preserves_selection(self):
         self.seed()
         self.c.lock()
+        expected = QRectF(self.c.focus)
         self.c.geometry_changed()
+        self.assertEqual(self.c.mode, "present")
+        self.assertEqual(self.c.focus, expected)
+        self.assertTrue(self.o.isVisible())
+
+    def test_geometry_notification_during_drag_does_not_interrupt_move(self):
+        self.seed()
+        self.c.edit()
+        QTest.mousePress(self.o, Qt.MouseButton.LeftButton, pos=QPoint(180, 200))
+        self.c.geometry_changed()
+        self.assertEqual(self.o.drag_kind, "move")
+        QTest.mouseRelease(self.o, Qt.MouseButton.LeftButton, pos=QPoint(210, 220))
+        self.assertEqual(self.o.local_rect(), QRectF(130, 140, 200, 160))
+        self.assertEqual(self.c.mode, "edit")
+
+    def test_changed_screen_bounds_fit_selection_instead_of_clearing(self):
+        self.seed()
+        self.c.focus = QRectF(650, 650, 100, 100)
+        self.c.lock()
+        with patch.object(type(self.o.screen_ref), "geometry", return_value=QRect(50, 30, 400, 300)):
+            self.c.geometry_changed()
+        self.assertEqual(self.c.focus, QRectF(350, 230, 100, 100))
+        self.assertEqual(self.c.mode, "present")
+
+    def test_removed_selected_screen_clears_safely(self):
+        self.seed()
+        self.c.lock()
+        with patch.object(self.app, "screens", return_value=[]):
+            self.c.geometry_changed()
+        self.assertTrue(self.c.focus.isEmpty())
         self.assertEqual(self.c.mode, "off")
-        self.assertTrue(all(not o.isVisible() for o in self.c.overlays))
+
+    def test_screen_list_refresh_keeps_selected_area(self):
+        self.seed()
+        self.c.lock()
+        expected = QRectF(self.c.focus)
+        self.c.screens_changed()
+        self.assertEqual(self.c.focus, expected)
+        self.assertEqual(self.c.mode, "present")
+        self.assertTrue(next(o for o in self.c.overlays if o.screen_ref == self.c.selected_screen).isVisible())
+
+    def test_screen_refresh_during_drag_reuses_input_window(self):
+        self.seed()
+        self.c.edit()
+        QTest.mousePress(self.o, Qt.MouseButton.LeftButton, pos=QPoint(180, 200))
+        self.c.screens_changed()
+        self.assertIs(self.c.overlays[0], self.o)
+        self.assertEqual(self.o.drag_kind, "move")
+        QTest.mouseRelease(self.o, Qt.MouseButton.LeftButton, pos=QPoint(210, 220))
+        self.assertEqual(self.o.local_rect(), QRectF(130, 140, 200, 160))
+
+    def test_screen_refresh_keeps_annotation_mode_and_marks(self):
+        from annotations import Mark
+        self.seed()
+        self.c.panel.tabs.setCurrentIndex(1)
+        mark = Mark("pen", "#e53935", 4, 40, [QPointF(100, 100), QPointF(150, 100)])
+        self.c.annotations.marks = [mark]
+        self.c.screens_changed()
+        self.assertTrue(self.c.annotations.drawing)
+        self.assertEqual(self.c.annotations.marks, [mark])
+        self.assertFalse(self.c.focus.isEmpty())
 
     def test_editing_uses_full_dimming_and_updates_live(self):
         self.seed()
@@ -416,6 +475,47 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.c.mode, "present")
 
 
+class CursorTests(unittest.TestCase):
+    def test_hide_and_restore_balance_and_preserve_cursor_theme(self):
+        api = Mock()
+        cursor = SystemCursor(api=api)
+        cursor.set_hidden(True)
+        cursor.set_hidden(True)
+        self.assertTrue(cursor.hidden)
+        api.MagInitialize.assert_called_once()
+        api.MagShowSystemCursor.assert_called_once_with(False)
+        cursor.restore()
+        cursor.restore()
+        self.assertFalse(cursor.hidden)
+        self.assertEqual(api.MagShowSystemCursor.call_args_list, [((False,),), ((True,),)])
+        cursor.close()
+        api.MagUninitialize.assert_called_once()
+
+    def test_failed_hide_or_restore_can_retry(self):
+        api = Mock()
+        api.MagInitialize.return_value = 1
+        api.MagShowSystemCursor.side_effect = [0, 1, 0, 1]
+        cursor = SystemCursor(api=api)
+        cursor.set_hidden(True)
+        self.assertFalse(cursor.hidden)
+        cursor.set_hidden(True)
+        self.assertTrue(cursor.hidden)
+        cursor.restore()
+        self.assertTrue(cursor.hidden)
+        cursor.close()
+        self.assertFalse(cursor.hidden)
+        api.MagUninitialize.assert_called_once()
+
+    def test_emergency_exit_restores_pointer_before_terminating(self):
+        actions = []
+        guard = EmergencyExit(key_down=lambda: True, cleanup=lambda: actions.append("show cursor"),
+                              terminate=lambda: actions.append("exit"))
+        guard.active.set()
+        guard.check(0)
+        guard.check(2.1)
+        self.assertEqual(actions, ["show cursor", "exit"])
+
+
 class EmergencyTests(unittest.TestCase):
     def test_only_continuous_hold_while_active_exits(self):
         key = Mock(return_value=True)
@@ -436,7 +536,7 @@ class EmergencyTests(unittest.TestCase):
         terminate.assert_called_once()
 
     def test_worker_can_exit_without_ui_event_loop(self):
-        code = ("from emergency import EmergencyExit; import time; "
+        code = ("from emergency import EmergencyExit, SystemCursor; import time; "
                 "guard = EmergencyExit(key_down=lambda: True); "
                 "guard.active.set(); guard.start(); time.sleep(8)")
         result = subprocess.run([sys.executable, "-c", code], timeout=6, capture_output=True)

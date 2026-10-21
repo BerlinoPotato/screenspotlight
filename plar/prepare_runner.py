@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def runner_source():
     source = (ROOT / "spotlight.py").read_text(encoding="utf-8")
     emergency = (ROOT / "emergency.py").read_text(encoding="utf-8")
-    source = source.replace("from emergency import EmergencyExit", emergency)
+    source = source.replace("from emergency import EmergencyExit, SystemCursor", emergency)
     annotations = (ROOT / "annotations.py").read_text(encoding="utf-8")
     icons = {path.name: base64.b64encode(path.read_bytes()).decode("ascii")
              for path in sorted((ROOT / "icons").glob("*.png"))}
@@ -21,7 +21,7 @@ def runner_source():
         f'    pixmap.loadFromData(base64.b64decode({icons!r}[name]))\n'
         '    return pixmap',
     )
-    source = source.replace("from annotations import AnnotationTools, tool_icon", annotations)
+    source = source.replace("from annotations import AnnotationTools, tool_icon, set_overlay_flags", annotations)
     source = source.replace(
         "def app_icon():\n    return QIcon(str(Path(__file__).resolve().with_name(\"screenspotlight.png\")))",
         "def app_icon():\n"
