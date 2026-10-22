@@ -68,6 +68,81 @@ class AnnotationTests(unittest.TestCase):
         self.a.sequence.up_arrow.click()
         self.assertEqual(self.a.sequence.text(), "AA")
 
+    def test_desktop_mode_toggle_and_every_tool_have_one_selected_button(self):
+        self.c.show_panel()
+        self.c.panel.tabs.setCurrentIndex(1)
+        for tool in self.a.tool_specs:
+            with self.subTest(tool=tool):
+                self.a.set_tool(tool)
+                self.assertTrue(self.a.drawing)
+                self.assertEqual([b for b in self.a.tools.buttons() if b.isChecked()],
+                                 [self.a.tool_buttons[tool]])
+                self.a.interact_button.click()
+                self.assertFalse(self.a.drawing)
+                self.assertEqual([b for b in self.a.tools.buttons() if b.isChecked()],
+                                 [self.a.interact_button])
+                self.a.interact_button.click()
+                self.assertTrue(self.a.drawing)
+                self.assertEqual(self.a.tool, tool)
+                self.assertEqual([b for b in self.a.tools.buttons() if b.isChecked()],
+                                 [self.a.tool_buttons[tool]])
+                self.a.interact()
+                self.a.tool_buttons[tool].click()
+                self.assertTrue(self.a.drawing)
+                self.assertEqual(self.a.tool, tool)
+        self.c.panel.tabs.setCurrentIndex(0)
+        self.assertEqual(self.a.tools.checkedButton(), self.a.interact_button)
+
+    def test_manual_typing_commits_all_sizes_and_marker_values(self):
+        self.c.show_panel()
+        self.c.panel.tabs.setCurrentIndex(1)
+        for tool, widget, text, expected in (
+                ("pen", self.a.pen_width, "12", 12),
+                ("highlighter", self.a.highlighter_width, "30", 30),
+                ("rectangle", self.a.shape_width, "9", 9),
+                ("number", self.a.size, "85", 85),
+                ("laser", self.a.laser_size, "28", 28),
+                ("number", self.a.sequence, "123456", 123456),
+                ("letter", self.a.sequence, "AZ", 52)):
+            with self.subTest(tool=tool, field=widget.accessibleName()):
+                self.a.set_tool(tool)
+                self.c.panel.annotation_scroll.ensureWidgetVisible(widget)
+                self.app.processEvents()
+                QTest.mouseClick(widget.lineEdit(), Qt.MouseButton.LeftButton)
+                QTest.keyClick(widget.lineEdit(), Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+                QTest.keyClicks(widget.lineEdit(), text)
+                QTest.keyClick(widget.lineEdit(), Qt.Key.Key_Return)
+                self.assertEqual(widget.value(), expected)
+                self.assertTrue(self.a.drawing, "Editing values must not end drawing")
+        self.assertEqual(self.a.sequence.text(), "AZ")
+
+    def test_tool_shortcuts_activate_and_tooltips_match(self):
+        from annotations import TOOL_SHORTCUTS
+        self.c.show_panel()
+        self.c.panel.tabs.setCurrentIndex(1)
+        self.app.processEvents()
+        self.c.panel.activateWindow()
+        self.c.panel.setFocus()
+        QTest.qWait(20)
+        modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+        for key, tool in ((Qt.Key.Key_A, "arrow"), (Qt.Key.Key_P, "pen")):
+            QTest.keyClick(self.c.panel, key, modifiers)
+            self.assertEqual(self.a.tool, tool)
+            self.assertTrue(self.a.drawing)
+        QTest.keyClick(self.c.panel, Qt.Key.Key_N, modifiers | Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(self.a.tool, "letter")
+        self.c.panel.tabs.setCurrentIndex(0)
+        self.c.panel.activateWindow()
+        self.c.panel.setFocus()
+        QTest.keyClick(self.c.panel, Qt.Key.Key_A, modifiers)
+        self.assertEqual(self.a.tool, "letter", "Hidden annotation shortcuts must not change tools")
+        self.c.panel.tabs.setCurrentIndex(1)
+        for tool, (label, _) in self.a.tool_specs.items():
+            self.a.set_tool(tool)
+            self.assertIn(TOOL_SHORTCUTS[label], self.a.tool_buttons[tool].toolTip())
+        self.a.interact_button.click()
+        self.assertIn("Ctrl+Alt+D", self.a.interact_button.toolTip())
+
     def test_fast_color_switch_and_palette_animation_end_at_current_selection(self):
         self.c.panel.tabs.setCurrentIndex(1)
         self.app.processEvents()

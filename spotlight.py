@@ -16,13 +16,13 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QRegion, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton,
-    QDialog, QGraphicsDropShadowEffect, QGroupBox, QMessageBox, QSystemTrayIcon, QSlider, QSizePolicy, QTabBar, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QRadioButton,
+    QDialog, QGraphicsDropShadowEffect, QGroupBox, QMessageBox, QSystemTrayIcon, QSlider, QScrollArea, QFrame, QSizePolicy, QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.37"
+APP_VERSION = "0.1.38"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -367,13 +367,19 @@ class FullWidthTabs(QTabWidget):
     def sizeHint(self):
         if not self.count():
             return super().sizeHint()
-        size = QSize()
-        for index in range(self.count()):
-            size = size.expandedTo(self.widget(index).sizeHint())
-        return QSize(size.width(), size.height() + self.tabBar().sizeHint().height() + 8)
+        return QSize(372, 220)
 
     def minimumSizeHint(self):
-        return self.sizeHint()
+        return QSize(0, self.tabBar().sizeHint().height() + 40)
+
+    def add_scroll_tab(self, widget, label):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(widget)
+        self.addTab(scroll, label)
+        return scroll
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -388,9 +394,9 @@ class Panel(QWidget):
         self.setWindowTitle(WINDOW_TITLE)
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setMinimumWidth(440)
+        self.setMinimumSize(360, 320)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
         title = QLabel("Screen Spotlight")
         title.setStyleSheet("font-size: 19px; font-weight: 500;")
@@ -409,17 +415,17 @@ class Panel(QWidget):
         layout.addLayout(header)
         outer_layout = layout
         self.tabs = FullWidthTabs()
-        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         spotlight_tab = QWidget()
         layout = QVBoxLayout(spotlight_tab)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(8)
         spotlight_layout = layout
-        self.tabs.addTab(spotlight_tab, "Spotlight")
+        self.spotlight_scroll = self.tabs.add_scroll_tab(spotlight_tab, "Spotlight")
         controller.annotations = AnnotationTools(controller)
-        self.tabs.addTab(controller.annotations, "Annotation")
-        self.tabs.setTabToolTip(0, "Spotlight: select an area and dim its surroundings")
-        self.tabs.setTabToolTip(1, "Annotation: start drawing with the selected tool")
+        self.annotation_scroll = self.tabs.add_scroll_tab(controller.annotations, "Annotation")
+        self.tabs.setTabToolTip(0, "Spotlight: select an area and dim its surroundings\nSelect area = Ctrl+Shift+F")
+        self.tabs.setTabToolTip(1, "Annotation: start drawing with the selected tool; hover over tools for shortcuts")
         outer_layout.addWidget(self.tabs)
         shape_box = QGroupBox("Highlight shape")
         layout.addWidget(shape_box)
@@ -429,6 +435,8 @@ class Panel(QWidget):
         for name in ("Rectangle", "Circle"):
             button = QPushButton(name)
             button.setCheckable(True)
+            key = "R" if name == "Rectangle" else "C"
+            button.setToolTip(f"{name} = {key} while selecting or editing")
             button.setObjectName("rectangleChoice" if name == "Rectangle" else "circleChoice")
             button.setFixedHeight(42)
             self.shape_group.addButton(button)
@@ -454,6 +462,7 @@ class Panel(QWidget):
         self.dim_slider.setRange(10, 100)
         self.dim_slider.setValue(controller.dim)
         self.dim_slider.setAccessibleName("Background dimming percentage")
+        self.dim_slider.setToolTip("Adjust background dimming = + / - while selecting or editing")
         self.dim_slider.valueChanged.connect(controller.set_dim)
         dim_layout.addWidget(self.dim_slider)
         ends = QHBoxLayout()
@@ -466,29 +475,35 @@ class Panel(QWidget):
         dim_layout.addLayout(ends)
         self.dim_group = QButtonGroup(self)
         self.dim_buttons = {}
-        dim_row = QHBoxLayout()
+        dim_row = QGridLayout()
         dim_row.setSpacing(5)
         dim_layout.addLayout(dim_row)
-        for value in DIM_PRESETS:
+        for index, value in enumerate(DIM_PRESETS):
             button = QPushButton(f"{value}%")
             button.setCheckable(True)
             button.setObjectName("dimPreset")
             self.dim_group.addButton(button, value)
             self.dim_buttons[value] = button
             button.setChecked(value == controller.dim)
-            dim_row.addWidget(button)
+            button.setToolTip(f"Set dimming to {value}% (+ / - steps through presets while editing)")
+            dim_row.addWidget(button, index // 4, index % 4)
         self.dim_group.idClicked.connect(controller.set_dim)
         area_box = QGroupBox("Your spotlight")
         layout.addWidget(area_box)
         layout = QVBoxLayout(area_box)
         select = QPushButton("Select area")
         select.setObjectName("primary")
+        select.setToolTip("Select area = Ctrl+Shift+F")
         select.setFixedHeight(42)
         select.clicked.connect(controller.select)
         layout.addWidget(select)
         row = QHBoxLayout()
-        for label, action in [("Move / resize", controller.edit), ("Lock / present", controller.lock), ("Clear", controller.clear)]:
+        for label, action, shortcut in [("Move / resize", controller.edit, "Ctrl+Shift+E"),
+                                        ("Lock / present", controller.lock, "Enter while editing / Ctrl+Shift+E"),
+                                        ("Clear", controller.clear, "Esc / Ctrl+Shift+X")]:
             button = QPushButton(label)
+            button.setToolTip(f"{label} = {shortcut}")
+            button.setStyleSheet("padding: 9px 6px;")
             button.clicked.connect(action)
             row.addWidget(button)
         layout.addLayout(row)
@@ -500,6 +515,7 @@ class Panel(QWidget):
         self.status = controller.annotations.status
         self.status.setText("Ready — select an area to begin.")
         self.status.setWordWrap(True)
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.status)
         self.information = QDialog(self)
         self.information.setWindowTitle("Information")
@@ -518,7 +534,12 @@ class Panel(QWidget):
             "Esc / Ctrl+Shift+X   Clear and return to controls\n"
             "Right-click   Clear while selecting or editing\n"
             "Alt+Tab / Ctrl+Shift+P   Show controls\n\n"
+            "Resize the controls freely; scroll inside either tab for all settings.\n"
             "Annotation: click a tool to start drawing. Controls stay available.\n"
+            "Pointer toggles desktop interaction and the previous drawing tool.\n"
+            "Hover over any drawing tool to see its Ctrl+Alt shortcut.\n"
+            "Annotation shortcuts work while this app is active on the Annotation tab.\n"
+            "Click size or marker values to type; press Enter to apply.\n"
             "Annotations stay pinned to their screen when controls move.\n"
             "Move to this screen: confirm moving the area, keeping all marks.\n"
             "Clear annotations resets marks and numbering; Undo restores them.\n"
@@ -597,6 +618,10 @@ class Panel(QWidget):
             QRadioButton:focus { color: #303542; text-decoration: underline; }
             QRadioButton:disabled { color: #9197a3; }
             QRadioButton::indicator:disabled { background: #eef0f4; border-color: #d8dce4; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background: #ffffff; border: none; }
+            QScrollBar:vertical { background: #f0f1f4; width: 10px; margin: 2px 0; border-radius: 5px; }
+            QScrollBar::handle:vertical { background: #aeb6c5; min-height: 28px; border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
             QTabWidget::pane { border: none; background: #ffffff; }
             QTabBar { background: #f0f1f4; border-radius: 22px; }
             QTabBar::tab { background: transparent; color: #707684; padding: 11px 16px;
@@ -648,7 +673,7 @@ class Panel(QWidget):
         self.status.ensurePolished()
         self.status.setMinimumHeight(self.status.fontMetrics().lineSpacing() * 2 + 16)
         self.tabs.currentChanged.connect(self.tab_changed)
-        self.resize(self.minimumWidth(), self.sizeHint().height())
+        self.resize(400, 400)
 
     def tab_changed(self, index):
         annotations = self.controller.annotations

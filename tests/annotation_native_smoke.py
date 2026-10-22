@@ -217,6 +217,20 @@ def main():
             f"Ink must allow clicks through after Interact: hit={window}, title={title.value!r}, "
             f"target={int(target.winId())}, ink={int(a.overlay.winId())}, "
             f"spotlight={[int(o.winId()) for o in c.overlays]}, flags={a.overlay.windowFlags()}")
+        for tool in ("pen", "highlighter", "eraser", "move"):
+            a.set_tool(tool)
+            QTest.qWait(60)
+            assert hit(a.overlay, local + QPoint(30, 30)) == int(a.overlay.winId()), f"{tool} cannot resume drawing after desktop interaction"
+            assert [b for b in a.tools.buttons() if b.isChecked()] == [a.tool_buttons[tool]]
+            a.interact_button.click()
+            QTest.qWait(60)
+            assert not a.drawing and a.tools.checkedButton() == a.interact_button
+            assert hit(target, QPoint(150, 140)) == int(target.winId()), "Desktop mode did not restore click-through"
+            a.interact_button.click()
+            QTest.qWait(60)
+            assert a.drawing and a.tool == tool
+            assert hit(a.overlay, local + QPoint(30, 30)) == int(a.overlay.winId()), "Pointer toggle failed to restore drawing input"
+            a.interact()
         c.show_panel()
         c.panel.move(origin)
         QTest.qWait(100)

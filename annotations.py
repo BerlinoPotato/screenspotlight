@@ -5,7 +5,7 @@ from math import atan2, cos, sin, pi
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QEasingCurve, QVariantAnimation
-from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QValidator
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QShortcut, QValidator
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
@@ -36,10 +36,30 @@ TOOL_DESCRIPTIONS = {
     "Undo": "Undo: reverse the last annotation change",
     "Redo": "Redo: restore the last undone change",
     "Clear annotations": "Clear annotations: erase all marks",
-    "Interact with desktop": "Interact with desktop: stop drawing and use the app underneath; keep annotations visible",
+    "Interact with desktop": "Interact with desktop: toggle desktop clicks and the previous drawing tool; keep annotations visible",
     "Capture Image": "Capture Image: take a fresh screenshot of the chosen area or monitor and copy it to the clipboard",
     "Save Image": "Save Image: take a fresh screenshot of the chosen area or monitor and choose where to save the PNG image",
 }
+
+
+# Local to this app: these shortcuts never intercept desktop typing.
+TOOL_SHORTCUTS = {
+    "Pen": "Ctrl+Alt+P", "Highlighter": "Ctrl+Alt+H",
+    "Horizontal highlighter": "Ctrl+Alt+Shift+H", "Laser pointer": "Ctrl+Alt+L",
+    "Arrow": "Ctrl+Alt+A", "Rectangle": "Ctrl+Alt+R",
+    "Filled rectangle": "Ctrl+Alt+Shift+R", "Circle": "Ctrl+Alt+C",
+    "Filled circle": "Ctrl+Alt+Shift+C", "Number": "Ctrl+Alt+N",
+    "Letter": "Ctrl+Alt+Shift+N", "Eraser": "Ctrl+Alt+E",
+    "Move annotations": "Ctrl+Alt+M", "Interact with desktop": "Ctrl+Alt+D",
+}
+
+
+def tool_help(label):
+    text = TOOL_DESCRIPTIONS.get(label, label)
+    shortcut = TOOL_SHORTCUTS.get(label)
+    if label in ("Undo", "Redo"):
+        shortcut = ("Ctrl+Z" if label == "Undo" else "Ctrl+Y") + " while drawing"
+    return text + (f"\n{label} = {shortcut}" if shortcut else "")
 
 
 class ThinArrow(QPushButton):
@@ -72,8 +92,12 @@ class SlimSpinBox(QSpinBox):
         super().__init__()
         self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(112, 38)
-        self.setStyleSheet("QSpinBox { background: transparent; border: none; padding: 0 24px; font-size: 22px; color: #454551; } QSpinBox:focus { border: none; } QLineEdit { background: transparent; selection-background-color: #eef0f4; selection-color: #454551; }")
+        self.setFixedSize(132, 38)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setReadOnly(False)
+        self.setKeyboardTracking(False)
+        self.setToolTip("Click the value to type; press Enter to apply, or use the arrows")
+        self.setStyleSheet("QSpinBox { background: #ffffff; border: 1px solid #d8dce4; border-radius: 8px; min-height: 36px; padding: 0 24px 0 4px; font-size: 20px; color: #454551; } QSpinBox:focus { border-color: #697186; } QLineEdit { background: transparent; selection-background-color: #dbe3f2; selection-color: #454551; }")
         self.up_arrow = ThinArrow(True, self)
         self.down_arrow = ThinArrow(False, self)
         self.up_arrow.clicked.connect(self.stepUp)
@@ -687,7 +711,6 @@ class AnnotationTools(QWidget):
             button = self.button(label, filename, lambda checked=False, key=name: self.set_tool(self.tool_buttons[key].tool))
             button.tool = name
             button.setCheckable(True)
-            button.setChecked(name == self.tool)
             self.tools.addButton(button)
             for name in names:
                 self.tool_buttons[name] = button
@@ -701,6 +724,10 @@ class AnnotationTools(QWidget):
                     label, filename = self.tool_specs[name]
                     action = button.tool_menu.addAction(tool_icon(filename), label)
                     action.setCheckable(True)
+                    action.setShortcut(QKeySequence(TOOL_SHORTCUTS[label]))
+                    action.setShortcutVisibleInContextMenu(True)
+                    action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+                    action.setToolTip(tool_help(label))
                     action.setChecked(name == button.tool)
                     action.triggered.connect(lambda checked=False, tool=name: self.set_tool(tool))
                     self.tool_actions[name] = action
@@ -713,7 +740,7 @@ class AnnotationTools(QWidget):
             ("Undo", "10 Undo.png", self.undo), ("Redo", "11 Redo.png", self.redo),
             ("Clear annotations", "12 Clear Annotations.png", self.clear),
             ("Move annotations", "13 Mouse Pointer.png", lambda: self.set_tool("move")),
-            ("Interact with desktop", "13 Mouse Pointer.png", self.interact),
+            ("Interact with desktop", "13 Mouse Pointer.png", self.toggle_desktop),
         ]:
             button = self.button(label, filename, action)
             if label == "Move annotations":
@@ -721,8 +748,23 @@ class AnnotationTools(QWidget):
                 button.setCheckable(True)
                 self.tools.addButton(button)
                 self.tool_buttons["move"] = button
+            elif label == "Interact with desktop":
+                button.setCheckable(True)
+                self.tools.addButton(button)
+                self.interact_button = button
             row.addWidget(button)
         tools_layout.addLayout(row)
+        self.sync_tool_buttons()
+        self.shortcuts = []
+        for tool, (label, _) in self.tool_specs.items():
+            shortcut = QShortcut(QKeySequence(TOOL_SHORTCUTS[label]), self)
+            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            shortcut.activated.connect(lambda key=tool: self.set_tool(key))
+            self.shortcuts.append(shortcut)
+        shortcut = QShortcut(QKeySequence(TOOL_SHORTCUTS["Interact with desktop"]), self)
+        shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        shortcut.activated.connect(self.toggle_desktop)
+        self.shortcuts.append(shortcut)
         color_box = QGroupBox("Color")
         color_layout = QVBoxLayout(color_box)
         layout.addWidget(color_box)
@@ -745,6 +787,7 @@ class AnnotationTools(QWidget):
         self.swatch_track = SwatchTrack(self.swatches)
         row = QHBoxLayout(self.swatch_track)
         row.setContentsMargins(4, 4, 4, 4)
+        row.setSpacing(1)
         for i, name in enumerate(COLOR_NAMES):
             button = ColorSwatch()
             button.setToolTip(name)
@@ -775,7 +818,7 @@ class AnnotationTools(QWidget):
         self.laser_size.setRange(4, 80)
         self.laser_size.setValue(16)
         self.laser_size.setAccessibleName("Laser size")
-        self.laser_size.setToolTip("Laser dot diameter in pixels")
+        self.laser_size.setToolTip("Laser dot diameter in pixels; click to type (4-80), then press Enter")
         self.sequence = MarkerSequence()
         self.sequence.setRange(1, 999999)
         self.sequence_label = QLabel("Next")
@@ -788,6 +831,7 @@ class AnnotationTools(QWidget):
             if widget is self.size:
                 self.marker_size_label = caption
             caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            caption.setBuddy(widget)
             widget.setAccessibleName(label)
             cell.addWidget(caption)
             cell.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -861,7 +905,7 @@ class AnnotationTools(QWidget):
         button.setIconSize(QSize(27, 27))
         button.setFixedHeight(38)
         button.setMinimumWidth(52)
-        button.setToolTip(TOOL_DESCRIPTIONS.get(label, label))
+        button.setToolTip(tool_help(label))
         button.setAccessibleName(label)
         button.clicked.connect(action)
 
@@ -879,11 +923,10 @@ class AnnotationTools(QWidget):
             self.shape_width.setValue(self.tool_widths.get(tool, 4))
         button = self.tool_buttons[tool]
         button.tool = tool
-        button.setChecked(True)
         label, filename = self.tool_specs[tool]
         button.setIcon(tool_icon(filename))
         button.setAccessibleName(label)
-        button.setToolTip(TOOL_DESCRIPTIONS[label] + (
+        button.setToolTip(tool_help(label) + (
             "; right-click or use the arrow for more tools" if button.tool_menu else ""))
         if button.tool_menu:
             for action in button.tool_menu.actions():
@@ -912,7 +955,20 @@ class AnnotationTools(QWidget):
             widget.setVisible(marker)
         self.sequence_label.setText("Next letter" if self.tool == "letter" else "Next number")
         self.sequence.set_letters(self.tool == "letter")
-        self.sequence.setToolTip(marker_label(self.sequence.value(), self.tool == "letter"))
+        self.sequence.setAccessibleName(self.sequence_label.text())
+        self.sequence.setToolTip("Type the next letter (A, Z, AA...), then press Enter" if self.tool == "letter" else
+                                 "Type the next number (1-999999), then press Enter")
+
+    def sync_tool_buttons(self):
+        """The selected button always represents the actual input mode."""
+        active = self.tool_buttons[self.tool] if self.drawing else self.interact_button
+        active.setChecked(True)
+
+    def toggle_desktop(self):
+        if self.drawing:
+            self.interact()
+        else:
+            self.start()
 
     def sync_capture_scope(self):
         selected = not self.controller.focus.isEmpty()
@@ -964,6 +1020,7 @@ class AnnotationTools(QWidget):
 
     def reset_screen(self):
         self.drawing = False
+        self.sync_tool_buttons()
         self.overlay.pending = None
         self.overlay.reset_edit()
         self.overlay.hide()
@@ -1006,6 +1063,7 @@ class AnnotationTools(QWidget):
             # Never dereference a removed QScreen, or discard its annotations.
             self.screen = None
             self.drawing = False
+            self.sync_tool_buttons()
             self.overlay.pending = None
             self.overlay.reset_edit()
             self.overlay.hide()
@@ -1058,13 +1116,16 @@ class AnnotationTools(QWidget):
         self.sync_screen()
         if self.screen is None:
             if self.screen_key is not None:
+                self.sync_tool_buttons()
                 self.status.setText("Annotation screen disconnected. Marks kept; move to this screen to continue.")
                 return
             target = c.selected_screen or c.panel.screen()
             if target is None:
+                self.sync_tool_buttons()
                 return
             self.bind_screen(target)
         if self.drawing:
+            self.sync_tool_buttons()
             self.status.setText(f"{self.tool_specs[self.tool][0]} active")
             return
         if not c.focus.isEmpty():
@@ -1074,6 +1135,7 @@ class AnnotationTools(QWidget):
             c.clear()
         c.panel.information.hide()
         self.drawing = True
+        self.sync_tool_buttons()
         c.arm_escape()
         c.panel.showNormal()
         self.overlay.present(True)
@@ -1084,12 +1146,13 @@ class AnnotationTools(QWidget):
     def interact(self):
         was_drawing = self.drawing
         self.drawing = False
+        self.sync_tool_buttons()
         if self.screen and was_drawing:
             self.overlay.present(False)
             self.controller.panel.raise_()
         if self.controller.mode == "off":
             self.controller.disarm_escape()
-        self.status.setText("Desktop interaction")
+        self.status.setText("Desktop interaction - click a tool or Pointer to resume drawing.")
 
     def capture(self, *, save_to_file=False):
         if self.capturing:

@@ -1,6 +1,6 @@
 # Screen Spotlight for PLAR
 
-This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.37 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
+This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.38 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
 
 The annotation toolbar groups highlighter, rectangle, circle, and marker variants. Right-click a grouped button, click its dropdown arrow, or press Alt+Down while focused to choose by icon and name. Left-click reuses the group's last choice. The horizontal highlighter uses Shift for vertical strokes; rectangles use Shift for squares. Filled shapes use the selected palette color. The laser dot follows the mouse while hiding the normal cursor, which returns over the controls or when laser mode ends. The laser allows desktop clicks, uses the Color palette and its own Laser size value, and disappears on Esc, Pointer, or capture. The Capture card has exactly two actions: **Capture Image** takes a fresh screenshot and copies it to the clipboard; **Save Image** takes a fresh screenshot and opens a dialog to select its PNG name and location. Each works independently without a previous capture. Both are disabled during capture and while the save dialog is open. Canceling the dialog or a capture/save failure restores the controls; Save Image leaves the clipboard unchanged.
 
@@ -8,7 +8,11 @@ The annotation toolbar groups highlighter, rectangle, circle, and marker variant
 
 Annotations stay pinned to their original monitor when controls or other applications move, tools or selections change, or a new spotlight is selected elsewhere. The Tools card identifies that monitor. Move the controls to a destination screen, then click **Move to this screen** and confirm to relocate the area without clearing marks, numbering, or Undo/Redo history. Cancel keeps the original screen. **Clear annotations** resets marks and numbering while keeping the screen pinned; Undo restores them. Display bounds and scaling changes preserve marks; offscreen marks remain saved. Disconnecting the pinned screen keeps its marks for the session and restores them in desktop-interaction mode when that identified screen reconnects. Full monitor capture uses the pinned annotation screen. Marks are not saved after quitting.
 
-Spotlight and Annotation share one stable control-window size. Visible screen layers retain their native translucent backing surface while switching tabs or input modes, preventing the previous reset-related blink. Both Normal and Pastel have eight colors, with the same neutral black (`#212121`) as the last swatch.
+The controls start at 400 x 400 logical pixels and resize down to 360 x 320. Both tabs scroll independently; the header, status, and version footer stay visible. Spotlight and Annotation retain the window size and position you choose. Visible screen layers retain their native translucent backing surface while switching tabs or input modes, preventing the previous reset-related blink. Both Normal and Pastel have eight colors, with the same neutral black (`#212121`) as the last swatch.
+
+Desktop interaction and drawing tools share one exclusive selected mode. Pointer toggles desktop interaction and the previous drawing tool; clicking a drawing tool also resumes drawing immediately. Hover tooltips and grouped menus show shortcuts. Annotation tool shortcuts use Ctrl+Alt plus P/H/L/A/R/C/N/E/M for pen/highlighter/laser/arrow/rectangle/circle/number/eraser/move, and D toggles desktop interaction. Add Shift to H/R/C/N for horizontal highlighter/filled rectangle/filled circle/letter. These work while the app is active on the Annotation tab. Existing global Spotlight shortcuts remain unchanged, including Select area = Ctrl+Shift+F.
+
+Size and marker fields accept typing: click a value, type, and press Enter or move focus to apply. Widths range from 1-40, marker size 20-120, laser size 4-80, and next number 1-999999. Letter entry accepts A, Z, AA, etc. Arrow stepping remains available.
 
 ## In PLAR
 
@@ -24,7 +28,7 @@ Rectangle editing also uses invisible targets along every edge and corner. Hover
 
 Shape and dimming are remembered across restarts. Every launch starts Ready without dimming the screen or restoring an area. Previously saved areas are ignored.
 
-Dimming uses a single radio row: **10, 20, 30, 50, 75, 85, 95, 100%**; + / minus steps through the presets. Only the selected monitor is dimmed; other monitors remain usable.
+Dimming uses two compact preset rows: **10, 20, 30, 50, 75, 85, 95, 100%**; + / minus steps through the presets. Only the selected monitor is dimmed; other monitors remain usable.
 
 ## Import manually or use on another computer
 

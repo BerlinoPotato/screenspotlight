@@ -16,7 +16,7 @@ from emergency import EmergencyExit, SystemCursor
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSettings, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from spotlight import DIM_PRESETS, Overlay, Spotlight, circle_hit, rectangle_hit, move_rect, selection_rect
 
@@ -84,6 +84,29 @@ class AppTests(unittest.TestCase):
         self.assertFalse(self.o.isVisible())
         self.assertTrue(self.c.panel.isVisible())
         self.assertFalse(self.c.panel.isMinimized())
+
+    def test_compact_resizable_panel_scrolls_both_tabs_without_clipping(self):
+        from PySide6.QtCore import QSize
+        self.c.show_panel()
+        self.app.processEvents()
+        self.assertEqual(self.c.panel.size(), QSize(400, 400))
+        for size in (QSize(360, 320), QSize(700, 850), QSize(400, 400)):
+            self.c.panel.resize(size)
+            for index in (0, 1):
+                self.c.panel.tabs.setCurrentIndex(index)
+                self.app.processEvents()
+                self.assertEqual(self.c.panel.size(), size)
+                scroll = self.c.panel.tabs.widget(index)
+                self.assertEqual(scroll.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                if scroll.horizontalScrollBar().maximum() > 0:
+                    self.assertTrue(scroll.horizontalScrollBar().isVisible())
+                if size.height() <= 400:
+                    self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+                scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+                self.assertTrue(self.c.panel.rect().contains(self.c.panel.version_label.geometry()))
+        for button in self.c.panel.findChildren(QPushButton):
+            if button.text() == "Select area":
+                self.assertIn("Ctrl+Shift+F", button.toolTip())
 
     def test_circle_invisible_edge_resizes_after_selection(self):
         self.c.shape = "Circle"

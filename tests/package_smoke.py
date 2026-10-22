@@ -42,7 +42,7 @@ def check_package(exe):
         try:
             path = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(path))
-            return bool(kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size))) and Path(path.value) == exe
+            return bool(kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size))) and Path(path.value).resolve() == exe.resolve()
         finally:
             kernel32.CloseHandle(handle)
 
