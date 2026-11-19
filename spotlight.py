@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.40"
+APP_VERSION = "0.1.42"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -690,6 +690,9 @@ class Panel(QWidget):
         self.tabs.currentChanged.connect(self.tab_changed)
         available = self.screen().availableGeometry()
         self.resize(min(480, available.width()), min(800, available.height() - 40))
+        # The landing page starts at its mode tabs; one Tab reaches its main action.
+        QWidget.setTabOrder(self.tabs.tabBar(), select)
+        self.tabs.tabBar().setFocus(Qt.FocusReason.OtherFocusReason)
 
     def tab_changed(self, index):
         annotations = self.controller.annotations
@@ -908,6 +911,10 @@ class Spotlight:
         if down and self.escape_held:
             return
         self.escape_held = down
+        popup = QApplication.activePopupWidget()
+        if popup is not None:
+            popup.close()
+            return
         if self.annotations.drawing:
             self.annotations.interact()
         elif self.mode != "off":

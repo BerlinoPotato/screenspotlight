@@ -38,6 +38,41 @@ class ImprovementTests(unittest.TestCase):
         screen.geometry.return_value = QRect(-1200, -100, 1200, 900)
         return screen
 
+    def test_monitor_map_escape_keeps_drawing_and_target(self):
+        self.a.start()
+        target = self.a.screen
+        self.a.screen_selector.showPopup()
+        self.assertIsNotNone(self.app.activePopupWidget())
+        self.c.escape()
+        self.assertFalse(self.a.screen_selector.monitor_popup.isVisible())
+        self.assertTrue(self.a.drawing)
+        self.assertIs(self.a.screen, target)
+
+    def test_monitor_map_cancel_keeps_annotations(self):
+        primary = self.app.primaryScreen()
+        other = self.other_screen()
+        self.a.start()
+        mark = Mark("pen", "#e53935", 4, 40, [QPointF(100, 120)])
+        self.a.marks = [mark]
+        with patch.object(self.app, "screens", return_value=[primary, other]):
+            self.a.sync_screen_controls()
+            self.a.screen_selector.showPopup()
+            with patch("annotations.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel):
+                self.a.screen_selector.monitor_popup.tiles[1].click()
+            self.assertIs(self.a.screen, primary)
+            self.assertEqual(self.a.marks, [mark])
+            self.assertTrue(self.a.drawing)
+
+    def test_monitor_map_qt_escape_then_poll_consumes_same_press(self):
+        self.a.start()
+        self.a.screen_selector.showPopup()
+        self.c.emergency = Mock()
+        self.c.emergency.key_down.return_value = True
+        QTest.keyPress(self.a.screen_selector.monitor_popup.rows[0], Qt.Key.Key_Escape)
+        self.c.poll_escape()
+        self.assertTrue(self.a.drawing)
+        self.assertFalse(self.a.screen_selector.monitor_popup.isVisible())
+
     def test_first_annotation_uses_visible_controls_target_not_spotlight(self):
         primary = self.app.primaryScreen()
         other = self.other_screen()

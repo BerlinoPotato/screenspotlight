@@ -1,14 +1,14 @@
-# Screen Spotlight 0.1.40
+# Screen Spotlight 0.1.42
 
-Version 0.1.40 adds a colorful **ABC Text icon** and synchronizes the configured PLAR runner. It includes **Text annotations**, a deliberate **annotation monitor selector**, and fixed **Draw / Interact with desktop** and **Capture / Save** controls on both tabs. **Ctrl+Shift+D** switches drawing and desktop interaction globally. The highlighter button starts with **Horizontal highlighter**. Controls start at **480 x 800** logical pixels, fitted to available screen space, and resize down to **360 x 480**. Scrolling over numeric values and the monitor selector scrolls the panel without changing them.
+Version 0.1.42 adds a visual annotation monitor map with clickable screens, names and logical resolutions. Blue marks the current target; Escape dismisses without stopping drawing. Version 0.1.41 starts keyboard focus on the **Spotlight / Annotation** selector. Press **Tab once** to focus **Select area**; **Shift+Tab** returns to the selector, and **Space** activates the focused button. Other controls remain keyboard accessible, and restoring the window keeps the last chosen focus. Version0.1.40 added a colorful **ABC Text icon** and synchronizes the configured PLAR runner. It includes **Text annotations**, a deliberate **annotation monitor selector**, and fixed **Draw / Interact with desktop** and **Capture / Save** controls on both tabs. **Ctrl+Shift+D** switches drawing and desktop interaction globally. The highlighter button starts with **Horizontal highlighter**. Controls start at **480 x 800** logical pixels, fitted to available screen space, and resize down to **360 x 480**. Scrolling over numeric values and the monitor selector scrolls the panel without changing them.
 
-The Windows application is packaged as one portable executable: `dist\ScreenSpotlight.exe` (release copy: `dist\0.1.40\ScreenSpotlight.exe`). Copy it to any folder and run it without Python or an accompanying `_internal` folder. Dependencies unpack into a temporary folder at startup. Choose the annotation monitor in Tools; changing tools, moving controls, or toggling desktop interaction never moves its marks.
+The Windows application is packaged as one portable executable: `dist\ScreenSpotlight.exe` (release copy: `dist\0.1.42\ScreenSpotlight.exe`). Copy it to any folder and run it without Python or an accompanying `_internal` folder. Dependencies unpack into a temporary folder at startup. Choose the annotation monitor in Tools; changing tools, moving controls, or toggling desktop interaction never moves its marks.
 
 Pen width and highlighter width appear together, with marker size and shape width below. Text or Laser size replaces marker size when that tool is selected; each value is retained for the session. Click a value to type, or use its arrow buttons. Pen defaults to 4 pixels and highlighter to 20 pixels. Unused marker-number rows collapse without resizing the outer window.
 
 A standalone Windows desktop tool built with Python and PySide6. Drag a rectangle or circle to keep part of your screen bright while dimming everything around it. Locked overlays stay on top and let mouse clicks reach your applications.
 
-The Windows installer is available as `dist\ScreenSpotlight-Setup-0.1.40.exe`; it retains the existing per-user installer, shortcuts, and uninstall support.
+The Windows installer is available as `dist\ScreenSpotlight-Setup-0.1.42.exe`; it retains the existing per-user installer, shortcuts, and uninstall support.
 
 ## Annotation and capture
 
@@ -105,7 +105,7 @@ Or double-click `build.cmd`. Launch or distribute only `dist\ScreenSpotlight.exe
 
 ## Install on Windows
 
-Run `dist\ScreenSpotlight-Setup-0.1.40.exe` on Windows 10 or 11 (x64). The default destination is `%LOCALAPPDATA%\Programs\Screen Spotlight`. The wizard lets you change the destination and add an optional desktop shortcut. Launch from the Start menu after setup, or select **Launch Screen Spotlight** on the final page. Remove it through **Settings > Apps > Installed apps > Screen Spotlight > Uninstall**. Per-user application preferences are retained when uninstalling. The installer and portable application are currently unsigned.
+Run `dist\ScreenSpotlight-Setup-0.1.42.exe` on Windows 10 or 11 (x64). The default destination is `%LOCALAPPDATA%\Programs\Screen Spotlight`. The wizard lets you change the destination and add an optional desktop shortcut. Launch from the Start menu after setup, or select **Launch Screen Spotlight** on the final page. Remove it through **Settings > Apps > Installed apps > Screen Spotlight > Uninstall**. Per-user application preferences are retained when uninstalling. The installer and portable application are currently unsigned.
 
 To build the installer, install the Python build dependencies above and [Inno Setup 6.3 or newer](https://jrsoftware.org/isdl.php), then run:
 
@@ -170,7 +170,7 @@ Manual check: select an area over a browser, click and scroll both inside and ou
 
 Implementation references: [Qt window flags and translucency](https://doc.qt.io/qt-6/qt.html), [Windows RegisterHotKey](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey), and [Windows cursor visibility](https://learn.microsoft.com/en-us/windows/win32/api/magnification/nf-magnification-magshowsystemcursor).
 
-The title bar is exactly `Screen Spotlight`. Version `0.1.40` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Annotation drawing tools use the PNGs in `icons` (new icon prompts are recorded in [icons/README.md](icons/README.md)); tabs and capture actions use text labels. Version metadata is defined in `version_info.txt`.
+The title bar is exactly `Screen Spotlight`. Version `0.1.42` appears only at the bottom of the controls window. Increment the patch version with each change. The application, tray, and Windows executable icons use `screenspotlight.png` (with `screenspotlight.ico` for Windows packaging). Annotation drawing tools use the PNGs in `icons` (new icon prompts are recorded in [icons/README.md](icons/README.md)); tabs and capture actions use text labels. Version metadata is defined in `version_info.txt`.
 
 
 PLAR deployment: the running launcher is configured to use `C:/tools/obt/projects/obeetwo/msrc/runner_screen_spotlight.py`. That is a separate self-contained copy; regenerating only the canonical runner does not update it. Version0.1.40 synchronizes this configured copy after backing it up, preserving launcher configuration and category. Always check the actual configured runner when distributing future changes.

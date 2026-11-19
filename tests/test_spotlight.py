@@ -85,6 +85,61 @@ class AppTests(unittest.TestCase):
         self.assertTrue(self.c.panel.isVisible())
         self.assertFalse(self.c.panel.isMinimized())
 
+    def test_landing_focus_is_tabs_then_one_tab_selects_area(self):
+        self.c.show_panel()
+        self.app.processEvents()
+        tabs = self.c.panel.tabs.tabBar()
+        select = next(b for b in self.c.panel.findChildren(QPushButton) if b.text() == "Select area")
+        self.assertIs(self.app.focusWidget(), tabs)
+        QTest.keyClick(tabs, Qt.Key.Key_Tab)
+        self.assertIs(self.app.focusWidget(), select)
+        QTest.keyClick(select, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+        self.assertIs(self.app.focusWidget(), tabs)
+        QTest.keyClick(tabs, Qt.Key.Key_Tab)
+        QTest.keyClick(select, Qt.Key.Key_Space)
+        self.assertEqual(self.c.mode, "select")
+        self.assertTrue(self.c.panel.isMinimized())
+
+    def test_restoring_controls_keeps_the_users_current_focus(self):
+        self.c.show_panel()
+        self.app.processEvents()
+        slider = self.c.panel.dim_slider
+        slider.setFocus(Qt.FocusReason.TabFocusReason)
+        self.c.panel.hide()
+        self.c.show_panel()
+        self.app.processEvents()
+        self.assertIs(self.c.panel.focusWidget(), slider)
+
+    def test_tab_selector_has_visible_keyboard_focus_indicator(self):
+        self.c.show_panel()
+        self.app.processEvents()
+        tabs = self.c.panel.tabs.tabBar()
+        tabs.slide.setCurrentTime(tabs.slide.duration())
+        tabs.setFocus(Qt.FocusReason.TabFocusReason)
+        self.app.processEvents()
+        self.assertTrue(tabs.hasFocus())
+        focused = tabs.grab().toImage()
+        tabs.clearFocus()
+        self.app.processEvents()
+        unfocused = tabs.grab().toImage()
+        self.assertNotEqual(focused, unfocused, "Custom tab painting must show keyboard focus")
+
+    def test_landing_tab_order_keeps_settings_and_actions_reachable(self):
+        self.c.show_panel()
+        self.app.processEvents()
+        select = next(b for b in self.c.panel.findChildren(QPushButton) if b.text() == "Select area")
+        # Exclusive button groups already use one Tab stop and arrow navigation.
+        required = {select, self.c.panel.info_button, self.c.panel.dim_slider,
+                    self.c.panel.shape_buttons["Rectangle"], self.c.annotations.capture_button,
+                    self.c.annotations.save_button, self.c.annotations.draw_button}
+        reached = set()
+        for _ in range(60):
+            focus = self.app.focusWidget()
+            self.assertIsNotNone(focus)
+            reached.add(focus)
+            QTest.keyClick(focus, Qt.Key.Key_Tab)
+        self.assertTrue(required.issubset(reached), "Focus ordering must keep other controls reachable")
+
     def test_compact_resizable_panel_scrolls_both_tabs_without_clipping(self):
         from PySide6.QtCore import QSize
         self.c.show_panel()

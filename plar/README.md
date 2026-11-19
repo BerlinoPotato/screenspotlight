@@ -1,6 +1,6 @@
 # Screen Spotlight for PLAR
 
-This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.40 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
+This is a self-contained Python edition generated from `spotlight.py`, `annotations.py`, `emergency.py`, and the application and tool icons. It uses no ScreenSpotlight.exe. Version 0.1.42 stays synchronized with the portable single-executable Windows release. All light-gray section-card corner radii remain 12 logical pixels. Tabs and compact choices retain their existing radii. Controls remain available for editing, presentation, and annotation.
 
 The annotation toolbar defaults to Horizontal highlighter and groups highlighter, rectangle, circle, and marker variants. Right-click a grouped button, click its dropdown arrow, or press Alt+Down while focused to choose by icon and name. Left-click reuses the group's last choice. The horizontal highlighter uses Shift for vertical strokes; rectangles use Shift for squares. Filled shapes use the selected palette color. The laser dot follows the mouse while hiding the normal cursor, which returns over the controls or when laser mode ends. The laser allows desktop clicks, uses the Color palette and its own Laser size value, and disappears on Esc, Interact, or capture. The Capture card has exactly two actions: **Capture Image** takes a fresh screenshot and copies it to the clipboard; **Save Image** takes a fresh screenshot and opens a dialog to select its PNG name and location. Each works independently without a previous capture. Both are disabled during capture and while the save dialog is open. Canceling the dialog or a capture/save failure restores the controls; Save Image leaves the clipboard unchanged.
 
@@ -61,3 +61,8 @@ After editing the application source or icon, run `py plar/prepare_runner.py` to
 
 
 0.1.40 adds the ABC Text icon. The currently configured deployed runner is `C:/tools/obt/projects/obeetwo/msrc/runner_screen_spotlight.py`, a separate copy from this folder. Synchronize it after regenerating the canonical runner and compare SHA256 hashes; keep a backup and preserve the existing tools configuration. The artifact UI probe verifies the embedded controls, not merely the version string.
+
+
+0.1.42 keyboard landing: initial focus is the Spotlight/Annotation selector; Tab once focuses Select area, Shift+Tab returns, and Space activates it. Restoring controls retains the last focused widget.
+
+0.1.42 visual monitor picker: open the annotation monitor selector for a proportional desktop map with numbered screens, full names and logical resolutions. Blue marks the selected target. Escape closes the picker without stopping drawing.

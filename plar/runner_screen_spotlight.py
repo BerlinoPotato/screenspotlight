@@ -205,8 +205,148 @@ def scroll_controls(widget, event):
 
 
 class MonitorSelector(QComboBox):
+    def __init__(self):
+        super().__init__()
+        self.monitors = []
+        self.monitor_popup = None
+        self.escape_handler = self.hidePopup
+
+    def set_monitors(self, entries):
+        entries = [(key, label, QRect(rect)) for key, label, rect in entries]
+        changed = entries != self.monitors
+        self.monitors = entries
+        if self.monitor_popup is not None and self.monitor_popup.isVisible() and changed:
+            self.hidePopup()
+            self.showPopup()
+
+    def showPopup(self):
+        if not self.isEnabled():
+            return
+        if self.monitor_popup is not None:
+            self.monitor_popup.close()
+            self.monitor_popup.deleteLater()
+        self.monitor_popup = MonitorMapPopup(self)
+        popup = self.monitor_popup
+        available = self.screen().availableGeometry()
+        popup.resize(min(max(self.width(), 430), available.width()),
+                     min(popup.sizeHint().height(), available.height()))
+        origin = self.mapToGlobal(self.rect().bottomLeft())
+        x = max(available.left(), min(origin.x(), available.right() - popup.width() + 1))
+        y = origin.y() + 2
+        if y + popup.height() > available.bottom() + 1:
+            y = self.mapToGlobal(self.rect().topLeft()).y() - popup.height() - 2
+        popup.move(x, max(available.top(), y))
+        popup.show()
+        if popup.rows:
+            index = next((i for i, entry in enumerate(self.monitors)
+                          if entry[0] == self.currentData()), 0)
+            popup.rows[index].setFocus()
+
+    def hidePopup(self):
+        if self.monitor_popup is not None:
+            self.monitor_popup.hide()
+        super().hidePopup()
+
+    def select_monitor(self, key):
+        self.hidePopup()
+        index = next((i for i in range(self.count()) if self.itemData(i) == key), -1)
+        if index >= 0 and any(entry[0] == key for entry in self.monitors):
+            self.setCurrentIndex(index)
+
     def wheelEvent(self, event):
         scroll_controls(self, event)
+
+
+class MonitorMapPopup(QWidget):
+    """Screen positions are logical desktop coordinates, including negative origins."""
+    def __init__(self, selector):
+        super().__init__(selector, Qt.WindowType.Popup | Qt.WindowType.WindowStaysOnTopHint)
+        self.selector = selector
+        self.setAccessibleName("Choose annotation monitor")
+        self.setObjectName("monitorMap")
+        self.setStyleSheet("""
+            QWidget#monitorMap { background: #f5f6f9; border: 1px solid #b8bfcd; }
+            QPushButton { background: #e0e3e9; color: #35445d; border: 2px solid transparent;
+                border-radius: 6px; padding: 6px; }
+            QPushButton:checked { background: #0078d4; color: white; }
+            QPushButton:focus { border-color: #283f67; }
+            QPushButton:hover { border-color: #697f9e; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(QLabel("Choose annotation monitor"))
+        self.canvas = QWidget()
+        self.canvas.setMinimumHeight(180)
+        layout.addWidget(self.canvas)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setMinimumHeight(42)
+        scroll.setMaximumHeight(min(210, max(42, len(selector.monitors) * 42)))
+        rows_widget = QWidget()
+        rows_layout = QVBoxLayout(rows_widget)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(4)
+        self.tiles, self.rows = [], []
+        for key, label, rect in selector.monitors:
+            tile = QPushButton(label.split(':', 1)[0], self.canvas)
+            tile.setStyleSheet("font-size: 24px; padding: 0;")
+            tile.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            tile.setToolTip(label)
+            tile.setAccessibleName(label)
+            row = QPushButton(label)
+            row.setStyleSheet("text-align: left;")
+            row.setMinimumHeight(36)
+            row.installEventFilter(self)
+            for button in (tile, row):
+                button.setCheckable(True)
+                button.setChecked(key == selector.currentData())
+                button.clicked.connect(lambda checked=False, key=key: selector.select_monitor(key))
+            rows_layout.addWidget(row)
+            self.tiles.append(tile)
+            self.rows.append(row)
+        if not self.rows:
+            rows_layout.addWidget(QLabel("No monitors connected"))
+        scroll.setWidget(rows_widget)
+        layout.addWidget(scroll)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.layout_monitors)
+
+    def layout_monitors(self):
+        if not self.selector.monitors:
+            return
+        bounds = QRect()
+        for key, label, rect in self.selector.monitors:
+            bounds = bounds.united(rect)
+        scale = min((self.canvas.width() - 12) / max(1, bounds.width()),
+                    (self.canvas.height() - 12) / max(1, bounds.height()))
+        ox = (self.canvas.width() - bounds.width() * scale) / 2
+        oy = (self.canvas.height() - bounds.height() * scale) / 2
+        for tile, (_, _, rect) in zip(self.tiles, self.selector.monitors):
+            tile.setGeometry(round(ox + (rect.x() - bounds.x()) * scale) + 2,
+                             round(oy + (rect.y() - bounds.y()) * scale) + 2,
+                             max(8, round(rect.width() * scale) - 4),
+                             max(8, round(rect.height() * scale) - 4))
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.KeyPress and watched in self.rows:
+            key = event.key()
+            if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                index = self.rows.index(watched)
+                self.rows[(index + (1 if key == Qt.Key.Key_Down else -1)) % len(self.rows)].setFocus()
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                watched.click()
+                return True
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.selector.escape_handler()
+        else:
+            super().keyPressEvent(event)
 
 
 class SlimSpinBox(QSpinBox):
@@ -835,6 +975,7 @@ class AnnotationTools(QWidget):
         self.screen_label = QLabel("Screen not chosen")
         self.screen_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.screen_selector = MonitorSelector()
+        self.screen_selector.escape_handler = self.controller.escape
         self.screen_selector.setAccessibleName("Annotation monitor")
         self.screen_selector.setToolTip("Choose the annotation monitor. Tools and desktop interaction keep this target.")
         self.screen_selector.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -1329,6 +1470,10 @@ class AnnotationTools(QWidget):
             selected = self.screen_selector.count() - 1
         self.screen_selector.setCurrentIndex(max(0, selected))
         self.screen_selector.blockSignals(False)
+        self.screen_selector.set_monitors([
+            (self.screen_identity(screen),
+             f"{index + 1}: {screen.name() or 'Monitor'} ({screen.geometry().width()} x {screen.geometry().height()})",
+             screen.geometry()) for index, screen in enumerate(screens)])
         self.screen_selector.setEnabled(not self.capturing and not self.text_entry_active)
         text = (f"Pinned: {self.screen_name}" if self.screen is not None else
                 f"Disconnected: {self.screen_name}" if self.screen_key is not None else "Choose annotation monitor")
@@ -1538,7 +1683,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.40"
+APP_VERSION = "0.1.42"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -2206,6 +2351,9 @@ class Panel(QWidget):
         self.tabs.currentChanged.connect(self.tab_changed)
         available = self.screen().availableGeometry()
         self.resize(min(480, available.width()), min(800, available.height() - 40))
+        # The landing page starts at its mode tabs; one Tab reaches its main action.
+        QWidget.setTabOrder(self.tabs.tabBar(), select)
+        self.tabs.tabBar().setFocus(Qt.FocusReason.OtherFocusReason)
 
     def tab_changed(self, index):
         annotations = self.controller.annotations
@@ -2428,6 +2576,10 @@ class Spotlight:
         if down and self.escape_held:
             return
         self.escape_held = down
+        popup = QApplication.activePopupWidget()
+        if popup is not None:
+            popup.close()
+            return
         if self.annotations.drawing:
             self.annotations.interact()
         elif self.mode != "off":

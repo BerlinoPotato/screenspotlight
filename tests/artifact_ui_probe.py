@@ -12,7 +12,7 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 
 def load_release(path, assets):
@@ -52,9 +52,24 @@ def main():
         a = controller.annotations
         try:
             controller.show_panel()
+            app.processEvents()
+            tabs = controller.panel.tabs.tabBar()
+            select = next(b for b in controller.panel.findChildren(QPushButton) if b.text() == 'Select area')
+            assert app.focusWidget() is tabs, 'Landing focus must start on Spotlight/Annotation'
+            QTest.keyClick(tabs, Qt.Key.Key_Tab)
+            assert app.focusWidget() is select, 'One Tab must focus Select area'
+            QTest.keyClick(select, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+            assert app.focusWidget() is tabs, 'Shift+Tab must return to Spotlight/Annotation'
             controller.panel.tabs.setCurrentIndex(1)
             app.processEvents()
             assert a.screen_selector.isVisible(), 'Release is missing the explicit monitor selector'
+            a.screen_selector.showPopup()
+            app.processEvents()
+            popup = a.screen_selector.monitor_popup
+            assert popup.isVisible() and popup.tiles, 'Release is missing the visual monitor map'
+            assert popup.rows[0].text() == a.screen_selector.itemText(0)
+            assert popup.tiles[0].geometry().width() > 0
+            a.screen_selector.hidePopup()
             assert a.tool_buttons['text'].isVisible(), 'Release is missing Text'
             assert not a.tool_buttons['text'].icon().isNull(), 'Release is missing the ABC icon'
             a.tool_buttons['highlighter'].click()
@@ -101,7 +116,7 @@ def main():
             if args.preview:
                 args.preview.parent.mkdir(parents=True, exist_ok=True)
                 assert controller.panel.grab().save(str(args.preview))
-            print(f'PASS: {args.artifact.name} {args.expected_version}: ABC icon, Text commit, default horizontal stroke, monitor selector, global toggle continuity, fixed Capture/Save and Draw/Interact on both tabs, numeric and monitor wheel safety')
+            print(f'PASS: {args.artifact.name} {args.expected_version}: ABC icon, Text commit, default horizontal stroke, visual monitor map, monitor selector, global toggle continuity, fixed Capture/Save and Draw/Interact on both tabs, numeric and monitor wheel safety, initial tabs/one-Tab Select area focus')
         finally:
             controller.shutdown()
             controller.panel.hide()
