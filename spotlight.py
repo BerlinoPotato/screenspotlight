@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 
 DIM_PRESETS = (10, 20, 30, 50, 75, 85, 95, 100)
-APP_VERSION = "0.1.38"
+APP_VERSION = "0.1.40"
 WINDOW_TITLE = "Screen Spotlight"
 MIN_SIZE = 24.0
 
@@ -115,9 +115,22 @@ class Hotkeys(QAbstractNativeEventFilter):
         if self.user32 and bytes(event_type) in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == 0x0312 and int(msg.wParam) in self.registered:
-                QTimer.singleShot(0, self.registered[int(msg.wParam)])
+                QTimer.singleShot(0, lambda ident=int(msg.wParam): self.dispatch(ident))
                 return True, 0
         return False, 0
+
+
+    def dispatch(self, ident):
+        modal = QApplication.activeModalWidget()
+        if ident == 3 and modal is not None:
+            modal.reject()
+            return
+        annotations = self.controller.annotations
+        if annotations.capturing or (ident != 5 and (modal is not None or annotations.text_entry_active)):
+            return
+        callback = self.registered.get(ident)
+        if callback is not None:
+            callback()
 
 
 class Overlay(OverlayWindow):
@@ -394,10 +407,10 @@ class Panel(QWidget):
         self.setWindowTitle(WINDOW_TITLE)
         self.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setMinimumSize(360, 320)
+        self.setMinimumSize(360, 480)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
         title = QLabel("Screen Spotlight")
         title.setStyleSheet("font-size: 19px; font-weight: 500;")
         header = QHBoxLayout()
@@ -426,7 +439,8 @@ class Panel(QWidget):
         self.annotation_scroll = self.tabs.add_scroll_tab(controller.annotations, "Annotation")
         self.tabs.setTabToolTip(0, "Spotlight: select an area and dim its surroundings\nSelect area = Ctrl+Shift+F")
         self.tabs.setTabToolTip(1, "Annotation: start drawing with the selected tool; hover over tools for shortcuts")
-        outer_layout.addWidget(self.tabs)
+        outer_layout.addWidget(controller.annotations.mode_control)
+        outer_layout.addWidget(self.tabs, 1)
         shape_box = QGroupBox("Highlight shape")
         layout.addWidget(shape_box)
         self.shape_group = QButtonGroup(self)
@@ -508,10 +522,11 @@ class Panel(QWidget):
             row.addWidget(button)
         layout.addLayout(row)
         for section_layout in (shape_row, dim_layout, layout):
-            section_layout.setContentsMargins(16, 12, 16, 14)
+            section_layout.setContentsMargins(12, 6, 12, 8)
 
         spotlight_layout.addStretch()
         layout = outer_layout
+        layout.addWidget(controller.annotations.capture_box)
         self.status = controller.annotations.status
         self.status.setText("Ready — select an area to begin.")
         self.status.setWordWrap(True)
@@ -536,12 +551,12 @@ class Panel(QWidget):
             "Alt+Tab / Ctrl+Shift+P   Show controls\n\n"
             "Resize the controls freely; scroll inside either tab for all settings.\n"
             "Annotation: click a tool to start drawing. Controls stay available.\n"
-            "Pointer toggles desktop interaction and the previous drawing tool.\n"
+            "Draw / Interact stays visible; Ctrl+Shift+D toggles globally.\n"
             "Hover over any drawing tool to see its Ctrl+Alt shortcut.\n"
             "Annotation shortcuts work while this app is active on the Annotation tab.\n"
-            "Click size or marker values to type; press Enter to apply.\n"
+            "Text = Ctrl+Alt+T. Click a size value to type; scrolling is safe.\n"
             "Annotations stay pinned to their screen when controls move.\n"
-            "Move to this screen: confirm moving the area, keeping all marks.\n"
+            "Choose an annotation monitor in Tools; confirm moving saved marks.\n"
             "Clear annotations resets marks and numbering; Undo restores them.\n"
             "Esc / Enter ends drawing and keeps the marks.\n"
             "Ctrl+Z / Ctrl+Y undoes / redoes while drawing.\n"
@@ -550,7 +565,7 @@ class Panel(QWidget):
             "Horizontal highlighter: Shift makes the line vertical.\n"
             "Rectangle / filled rectangle: Shift makes a square.\n"
             "Laser: dot only; cursor returns over controls and when laser stops.\n"
-            "Esc or Pointer stops the laser. Capture Image copies a fresh screenshot.\n"
+            "Esc or Interact stops the laser. Capture Image copies a fresh screenshot.\n"
             "Save Image captures a fresh screenshot and opens the save dialog.\n"
             "Capture defaults to the spotlight area, or the monitor if no area exists.\n\n"
             "While editing: arrows move; Shift+arrows move faster.\n"
@@ -576,11 +591,11 @@ class Panel(QWidget):
         close = QPushButton("Quit")
         close.clicked.connect(QApplication.instance().quit)
         row.addWidget(close)
-        layout.addLayout(row)
         self.version_label = QLabel(APP_VERSION)
         self.version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.version_label.setStyleSheet("color: #707684; font-size: 12px;")
-        layout.addWidget(self.version_label)
+        row.addWidget(self.version_label)
+        layout.addLayout(row)
         self.setObjectName("porcelainPanel")
         self.status.setObjectName("activityStatus")
         self.info_button.setObjectName("informationButton")
@@ -629,9 +644,9 @@ class Panel(QWidget):
             QTabBar::tab:selected { background: #ffffff; color: #454551; }
             QTabBar::tab:hover { color: #303542; background: #e9ecf2; }
             QGroupBox { background: #eef0f4; font-size: 12px; font-weight: 700;
-                        border: 1px solid #e9ecf1; border-radius: 12px; margin-top: 0; padding-top: 24px; }
+                        border: 1px solid #e9ecf1; border-radius: 12px; margin-top: 0; padding-top: 18px; }
             QGroupBox::title { subcontrol-origin: border; subcontrol-position: top left;
-                              top: 10px; left: 17px; color: #555d70; }
+                              top: 7px; left: 12px; color: #555d70; }
             QPushButton#rectangleChoice { border-radius: 6px; background: #e5e8ee; }
             QPushButton#circleChoice { border-radius: 21px; background: #e5e8ee; }
             QPushButton#rectangleChoice:checked, QPushButton#circleChoice:checked { background: #ffffff; color: #535764; border: 1px solid transparent; }
@@ -671,9 +686,10 @@ class Panel(QWidget):
             widget.ensurePolished()
         # Reserve two status lines so changing activity text cannot resize the panel.
         self.status.ensurePolished()
-        self.status.setMinimumHeight(self.status.fontMetrics().lineSpacing() * 2 + 16)
+        self.status.setMinimumHeight(self.status.fontMetrics().lineSpacing() * 2 + 8)
         self.tabs.currentChanged.connect(self.tab_changed)
-        self.resize(400, 400)
+        available = self.screen().availableGeometry()
+        self.resize(min(480, available.width()), min(800, available.height() - 40))
 
     def tab_changed(self, index):
         annotations = self.controller.annotations
@@ -752,7 +768,8 @@ class Spotlight:
             for ident, key, label, callback in [(1, ord("F"), "Ctrl+Shift+F", self.select),
                                                  (2, ord("E"), "Ctrl+Shift+E", self.toggle_edit),
                                                  (5, ord("P"), "Ctrl+Shift+P", self.show_panel),
-                                                 (4, ord("X"), "Ctrl+Shift+X", self.clear)]:
+                                                 (4, ord("X"), "Ctrl+Shift+X", self.clear),
+                                                 (6, ord("D"), "Ctrl+Shift+D", self.toggle_annotation_mode)]:
                 if not self.hotkeys.register(ident, 0x0002 | 0x0004, key, callback):
                     self.hotkey_errors.append(label + " is unavailable (possibly used by another app).")
         self.panel.warning.setText("\n".join(self.hotkey_errors))
@@ -820,6 +837,20 @@ class Spotlight:
     def tray_activated(self, reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
             self.show_panel()
+
+    def resume_annotation(self):
+        if self.annotations.capturing or self.annotations.text_entry_active or QApplication.activeModalWidget() is not None:
+            return
+        self.panel.tabs.setCurrentIndex(1)
+        self.annotations.start()
+
+    def toggle_annotation_mode(self):
+        if self.annotations.capturing or self.annotations.text_entry_active or QApplication.activeModalWidget() is not None:
+            return
+        if self.annotations.drawing:
+            self.annotations.interact()
+        else:
+            self.resume_annotation()
 
     def show_panel(self):
         self.panel.showNormal()

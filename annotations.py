@@ -5,10 +5,10 @@ from math import atan2, cos, sin, pi
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QEasingCurve, QVariantAnimation
-from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QShortcut, QValidator
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap, QRadialGradient, QRegion, QShortcut, QTextDocument, QTextCursor, QTextCharFormat, QValidator
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QFileDialog, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QComboBox, QFileDialog, QGridLayout, QGroupBox, QInputDialog,
+    QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSpinBox, QToolTip, QVBoxLayout, QWidget,
 )
 
 
@@ -21,9 +21,10 @@ COLOR_NAMES = ("Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "Bl
 
 TOOL_DESCRIPTIONS = {
     "Pen": "Pen: draw freehand strokes",
+    "Text": "Text: click to place multiline text in the selected color; Move or erase it like other marks",
     "Highlighter": "Highlighter: draw translucent strokes",
     "Horizontal highlighter": "Horizontal highlighter: drag a straight horizontal highlight; hold Shift for a vertical line",
-    "Laser pointer": "Laser pointer: show only a temporary laser dot; adjust Laser size and Color; clicks pass through; Esc or Pointer stops it",
+    "Laser pointer": "Laser pointer: show only a temporary laser dot; adjust Laser size and Color; clicks pass through; Esc or Interact stops it",
     "Filled rectangle": "Filled rectangle: drag a solid area in the selected color; hold Shift for a square",
     "Filled circle": "Filled circle: drag a solid circle in the selected color",
     "Arrow": "Arrow: drag to point at something",
@@ -44,7 +45,7 @@ TOOL_DESCRIPTIONS = {
 
 # Local to this app: these shortcuts never intercept desktop typing.
 TOOL_SHORTCUTS = {
-    "Pen": "Ctrl+Alt+P", "Highlighter": "Ctrl+Alt+H",
+    "Text": "Ctrl+Alt+T", "Pen": "Ctrl+Alt+P", "Highlighter": "Ctrl+Alt+H",
     "Horizontal highlighter": "Ctrl+Alt+Shift+H", "Laser pointer": "Ctrl+Alt+L",
     "Arrow": "Ctrl+Alt+A", "Rectangle": "Ctrl+Alt+R",
     "Filled rectangle": "Ctrl+Alt+Shift+R", "Circle": "Ctrl+Alt+C",
@@ -86,6 +87,22 @@ class ThinArrow(QPushButton):
         painter.drawPath(path)
 
 
+def scroll_controls(widget, event):
+    """Wheel scrolling must never mutate a setting or the selected monitor."""
+    parent = widget.parentWidget()
+    while parent is not None and not isinstance(parent, QScrollArea):
+        parent = parent.parentWidget()
+    if parent is not None:
+        QApplication.sendEvent(parent.viewport(), event)
+    else:
+        event.ignore()
+
+
+class MonitorSelector(QComboBox):
+    def wheelEvent(self, event):
+        scroll_controls(self, event)
+
+
 class SlimSpinBox(QSpinBox):
     """Editable number with real repeatable buttons and lightweight chevrons."""
     def __init__(self):
@@ -102,6 +119,9 @@ class SlimSpinBox(QSpinBox):
         self.down_arrow = ThinArrow(False, self)
         self.up_arrow.clicked.connect(self.stepUp)
         self.down_arrow.clicked.connect(self.stepDown)
+
+    def wheelEvent(self, event):
+        scroll_controls(self, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -256,8 +276,27 @@ class Mark:
     points: list = field(default_factory=list)
     label: str = ""
 
+    def text_document(self):
+        document = QTextDocument()
+        document.setDocumentMargin(0)
+        font = QFont("Segoe UI")
+        font.setPixelSize(self.size)
+        document.setDefaultFont(font)
+        document.setPlainText(self.label)
+        cursor = QTextCursor(document)
+        cursor.select(QTextCursor.SelectionType.Document)
+        style = QTextCharFormat()
+        style.setForeground(QColor(self.color))
+        cursor.mergeCharFormat(style)
+        document.adjustSize()
+        document.setTextWidth(min(max(1, self.width), document.idealWidth()))
+        return document
+
     def path(self):
         path = QPainterPath()
+        if self.tool == "text":
+            path.addRect(QRectF(self.points[0], self.text_document().size()))
+            return path
         start, end = self.points[0], self.points[-1]
         rect = QRectF(start, end).normalized()
         if self.tool in ("number", "letter"):
@@ -293,6 +332,11 @@ class Mark:
 
     def paint(self, painter):
         painter.save()
+        if self.tool == "text":
+            painter.translate(self.points[0])
+            self.text_document().drawContents(painter)
+            painter.restore()
+            return
         color = QColor(self.color)
         if self.tool in ("highlighter", "horizontal_highlighter"):
             color.setAlpha(90)
@@ -505,6 +549,9 @@ class InkOverlay(OverlayWindow):
                     self.update()
                     break
             return
+        if owner.tool == "text":
+            owner.add_text(point)
+            return
         mark = Mark(owner.tool, PALETTES[owner.variant.checkedId()][owner.color],
                     owner.width.value(), owner.size.value(), [point])
         if owner.tool in ("number", "letter"):
@@ -667,22 +714,28 @@ class AnnotationTools(QWidget):
         self.future = []
         self.captured = QPixmap()
         self.capturing = False
+        self.text_entry_active = False
         self.overlay = InkOverlay(self)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(4)
         tools_box = QGroupBox("Tools")
         tools_layout = QVBoxLayout(tools_box)
         layout.addWidget(tools_box)
         screen_row = QHBoxLayout()
         self.screen_label = QLabel("Screen not chosen")
         self.screen_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        screen_row.addWidget(self.screen_label, 1)
+        self.screen_selector = MonitorSelector()
+        self.screen_selector.setAccessibleName("Annotation monitor")
+        self.screen_selector.setToolTip("Choose the annotation monitor. Tools and desktop interaction keep this target.")
+        self.screen_selector.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.screen_selector.currentIndexChanged.connect(self.choose_screen)
+        screen_row.addWidget(self.screen_selector, 1)
         self.move_screen_button = QPushButton("Move to this screen")
         self.move_screen_button.setToolTip("Move the annotation area to the controls' monitor after confirmation; keep all marks and undo history")
         self.move_screen_button.setEnabled(False)
         self.move_screen_button.clicked.connect(self.move_to_controls_screen)
-        screen_row.addWidget(self.move_screen_button)
+        self.move_screen_button.hide()
         tools_layout.addLayout(screen_row)
         grid = QGridLayout()
         self.tools = QButtonGroup(self)
@@ -690,6 +743,7 @@ class AnnotationTools(QWidget):
         self.tool_actions = {}
         self.tool_specs = {
             "pen": ("Pen", "02 Pen.png"),
+            "text": ("Text", "25 Text.png"),
             "move": ("Move annotations", "13 Mouse Pointer.png"),
             "highlighter": ("Highlighter", "03 Highlighter.png"),
             "horizontal_highlighter": ("Horizontal highlighter", "21 Horizontal Highlighter.png"),
@@ -703,8 +757,8 @@ class AnnotationTools(QWidget):
             "letter": ("Letter", "08 Lettered Marker.png"),
             "eraser": ("Eraser", "09 Eraser.png"),
         }
-        groups = (("pen",), ("highlighter", "horizontal_highlighter"), ("laser",), ("arrow",),
-                  ("rectangle", "filled_rectangle"), ("circle", "filled_circle"), ("number", "letter"), ("eraser",))
+        groups = (("pen",), ("horizontal_highlighter", "highlighter"), ("laser",), ("arrow",),
+                  ("rectangle", "filled_rectangle"), ("circle", "filled_circle"), ("number", "letter"), ("eraser",), ("text",))
         for i, names in enumerate(groups):
             name = names[0]
             label, filename = self.tool_specs[name]
@@ -733,7 +787,7 @@ class AnnotationTools(QWidget):
                     self.tool_actions[name] = action
                 button.setToolTip(button.toolTip() + "; right-click or use the arrow for more tools")
                 button.setAccessibleDescription("More tools: right-click, dropdown arrow, or Alt+Down")
-            grid.addWidget(button, i // 4, i % 4)
+            grid.addWidget(button, i // 5, i % 5)
         tools_layout.addLayout(grid)
         row = QHBoxLayout()
         for label, filename, action in [
@@ -752,8 +806,29 @@ class AnnotationTools(QWidget):
                 button.setCheckable(True)
                 self.tools.addButton(button)
                 self.interact_button = button
+                button.setParent(self)
+                button.hide()
+                continue
             row.addWidget(button)
         tools_layout.addLayout(row)
+        self.mode_control = QWidget()
+        self.mode_control.setObjectName("segmentedChoices")
+        mode_row = QHBoxLayout(self.mode_control)
+        mode_row.setContentsMargins(3, 3, 3, 3)
+        mode_row.setSpacing(3)
+        self.mode_group = QButtonGroup(self)
+        self.draw_button = QPushButton("Draw")
+        self.desktop_button = QPushButton("Interact with desktop")
+        for button in (self.draw_button, self.desktop_button):
+            button.setCheckable(True)
+            button.setObjectName("segmentChoice")
+            button.setMinimumHeight(30)
+            self.mode_group.addButton(button)
+            mode_row.addWidget(button)
+        self.draw_button.setToolTip("Resume the previous annotation tool on the selected monitor (Ctrl+Shift+D)")
+        self.desktop_button.setToolTip("Click and type in your desktop apps; keep annotations visible (Ctrl+Shift+D)")
+        self.draw_button.clicked.connect(lambda: self.controller.resume_annotation())
+        self.desktop_button.clicked.connect(self.interact)
         self.sync_tool_buttons()
         self.shortcuts = []
         for tool, (label, _) in self.tool_specs.items():
@@ -814,6 +889,11 @@ class AnnotationTools(QWidget):
         self.size = SlimSpinBox()
         self.size.setRange(20, 120)
         self.size.setValue(40)
+        self.text_size = SlimSpinBox()
+        self.text_size.setRange(8, 144)
+        self.text_size.setValue(28)
+        self.text_size.setAccessibleName("Text size")
+        self.text_size.setToolTip("Text font size in pixels; click to type (8-144)")
         self.laser_size = SlimSpinBox()
         self.laser_size.setRange(4, 80)
         self.laser_size.setValue(16)
@@ -837,10 +917,11 @@ class AnnotationTools(QWidget):
             cell.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
             if widget is self.size:
                 cell.addWidget(self.laser_size, alignment=Qt.AlignmentFlag.AlignCenter)
+                cell.addWidget(self.text_size, alignment=Qt.AlignmentFlag.AlignCenter)
             row.addLayout(cell, index // 2, index % 2)
         row.setColumnStretch(0, 1)
         row.setColumnStretch(1, 1)
-        row.setVerticalSpacing(8)
+        row.setVerticalSpacing(4)
         self.sequence_divider = QWidget()
         self.sequence_divider.setFixedHeight(13)
         divider_layout = QHBoxLayout(self.sequence_divider)
@@ -860,15 +941,10 @@ class AnnotationTools(QWidget):
         extra.addStretch()
         row.addLayout(extra, 3, 0, 1, 2)
         settings_layout.addWidget(self.settings_row)
-        # Reserve the marker controls' row so tools and tabs share one stable size.
-        for widget in (self.sequence, self.sequence_label, self.sequence_divider):
-            policy = widget.sizePolicy()
-            policy.setRetainSizeWhenHidden(True)
-            widget.setSizePolicy(policy)
         self.update_settings()
-        capture_box = QGroupBox("Capture")
+        capture_box = self.capture_box = QGroupBox("Capture")
         capture_layout = QVBoxLayout(capture_box)
-        layout.addWidget(capture_box)
+        # Hosted by Panel, outside the scrolling tabs.
         self.capture_control = QWidget()
         self.capture_control.setObjectName("segmentedChoices")
         row = QHBoxLayout(self.capture_control)
@@ -885,6 +961,11 @@ class AnnotationTools(QWidget):
             button.setEnabled(i == 1)
             row.addWidget(button)
         capture_layout.addWidget(self.capture_control)
+        self.capture_target = QLabel("Full monitor: controls screen")
+        self.capture_target.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.capture_target.setToolTip("Capture target is independent of the active tab")
+        self.capture_target.hide()
+        self.capture_scope.idToggled.connect(lambda *args: self.sync_capture_target())
         row = QHBoxLayout()
         self.capture_button = self.button("Capture Image", "15 Capture Screen.png", self.capture)
         row.addWidget(self.capture_button)
@@ -892,7 +973,8 @@ class AnnotationTools(QWidget):
         row.addWidget(self.save_button)
         capture_layout.addLayout(row)
         for section_layout in (tools_layout, color_layout, settings_layout, capture_layout):
-            section_layout.setContentsMargins(14, 6, 14, 8)
+            section_layout.setContentsMargins(10, 4, 10, 6)
+            section_layout.setSpacing(4)
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
@@ -903,7 +985,8 @@ class AnnotationTools(QWidget):
         else:
             button.setIcon(tool_icon(filename))
         button.setIconSize(QSize(27, 27))
-        button.setFixedHeight(38)
+        button.setFixedHeight(34)
+        button.setStyleSheet("padding: 3px 6px;")
         button.setMinimumWidth(52)
         button.setToolTip(tool_help(label))
         button.setAccessibleName(label)
@@ -912,6 +995,8 @@ class AnnotationTools(QWidget):
         return button
 
     def set_tool(self, tool):
+        if self.capturing or self.text_entry_active or QApplication.activeModalWidget() is not None:
+            return
         was_laser = self.tool == "laser"
         was_drawing = self.drawing
         self.overlay.pending = None
@@ -924,7 +1009,8 @@ class AnnotationTools(QWidget):
         button = self.tool_buttons[tool]
         button.tool = tool
         label, filename = self.tool_specs[tool]
-        button.setIcon(tool_icon(filename))
+        button.setIcon(tool_icon(filename) if filename else QIcon())
+        button.setText("Move" if tool == "move" else "")
         button.setAccessibleName(label)
         button.setToolTip(tool_help(label) + (
             "; right-click or use the arrow for more tools" if button.tool_menu else ""))
@@ -945,11 +1031,13 @@ class AnnotationTools(QWidget):
 
     def update_settings(self):
         laser = self.tool == "laser"
-        # Hide the outgoing control first: showing both even briefly raises the
-        # top-level window's minimum height, which Qt does not shrink afterward.
-        (self.size if laser else self.laser_size).hide()
-        (self.laser_size if laser else self.size).show()
-        self.marker_size_label.setText("Laser size" if laser else "Marker size")
+        text = self.tool == "text"
+        for widget, visible in ((self.size, not laser and not text),
+                                (self.laser_size, laser), (self.text_size, text)):
+            if not visible:
+                widget.hide()
+        (self.laser_size if laser else self.text_size if text else self.size).show()
+        self.marker_size_label.setText("Laser size" if laser else "Text size" if text else "Marker size")
         marker = self.tool in ("number", "letter")
         for widget in (self.sequence, self.sequence_label, self.sequence_divider):
             widget.setVisible(marker)
@@ -963,8 +1051,58 @@ class AnnotationTools(QWidget):
         """The selected button always represents the actual input mode."""
         active = self.tool_buttons[self.tool] if self.drawing else self.interact_button
         active.setChecked(True)
+        if hasattr(self, "draw_button"):
+            (self.draw_button if self.drawing else self.desktop_button).setChecked(True)
+            for button in (self.draw_button, self.desktop_button):
+                button.setEnabled(not self.capturing and not self.text_entry_active)
+
+    def add_text(self, point):
+        if self.text_entry_active or self.capturing or self.screen is None:
+            return
+        target = self.screen
+        key = self.screen_key
+        color = PALETTES[self.variant.checkedId()][self.color]
+        size = self.text_size.value()
+        was_drawing = self.drawing
+        self.interact()
+        self.text_entry_active = True
+        self.controller.disarm_escape()
+        self.sync_tool_buttons()
+        self.sync_screen_controls()
+        rejection = ""
+        try:
+            text, accepted = QInputDialog.getMultiLineText(
+                self.controller.panel, "Add text", "Text (line breaks are supported):")
+            if not accepted or not text.strip() or self.screen is not target or self.screen_key != key or target not in self.controller.app.screens():
+                return
+            bounds = target.geometry()
+            mark = Mark("text", color, min(480, bounds.width()), size, [QPointF(point)], text)
+            while mark.path().boundingRect().height() > bounds.height() and mark.size > 8:
+                mark = replace(mark, size=mark.size - 1)
+            rect = mark.path().boundingRect()
+            if rect.height() > bounds.height():
+                rejection = "Text is too large for this monitor. Use fewer lines or shorter text."
+                return
+            mark = mark.translated(QPointF(
+                max(0, min(point.x(), bounds.width() - rect.width())) - point.x(),
+                max(0, min(point.y(), bounds.height() - rect.height())) - point.y()))
+            self.remember()
+            self.marks.append(mark)
+            self.overlay.update()
+        finally:
+            self.text_entry_active = False
+            if was_drawing and self.screen is target and target in self.controller.app.screens():
+                self.start()
+            elif self.controller.mode != "off":
+                self.controller.arm_escape()
+            self.sync_tool_buttons()
+            self.sync_screen_controls()
+            if rejection:
+                self.status.setText(rejection)
 
     def toggle_desktop(self):
+        if self.capturing or self.text_entry_active or QApplication.activeModalWidget() is not None:
+            return
         if self.drawing:
             self.interact()
         else:
@@ -978,6 +1116,19 @@ class AnnotationTools(QWidget):
         elif not selected:
             self.capture_scope.button(1).setChecked(True)
         self.had_selection = selected
+        self.sync_capture_target()
+
+    def sync_capture_target(self):
+        if not hasattr(self.controller, "panel"):
+            return
+        area = self.capture_scope.checkedId() == 0 and not self.controller.focus.isEmpty()
+        target = self.controller.selected_screen if area else self.screen or (
+            self.controller.panel.screen() if self.screen_key is None else None)
+        name = target.name() or "Monitor" if target is not None else f"Disconnected: {self.screen_name}"
+        text = f"{'Spotlight area' if area else 'Full monitor'}: {name}"
+        self.capture_target.setText(text)
+        self.capture_box.setTitle("Capture - " + name)
+        self.capture_target.setToolTip(text)
 
     def set_color(self, index):
         self.color = index
@@ -1049,13 +1200,42 @@ class AnnotationTools(QWidget):
     def sync_screen_controls(self):
         if not hasattr(self.controller, "panel"):
             return
+        screens = self.controller.app.screens()
+        target_key = self.screen_key
+        if target_key is None:
+            target = self.controller.panel.screen()
+            if target in screens:
+                target_key = self.screen_identity(target)
+        self.screen_selector.blockSignals(True)
+        self.screen_selector.clear()
+        for index, screen in enumerate(screens):
+            bounds = screen.geometry()
+            self.screen_selector.addItem(
+                f"{index + 1}: {screen.name() or 'Monitor'} ({bounds.width()} x {bounds.height()})",
+                self.screen_identity(screen))
+        selected = next((i for i in range(self.screen_selector.count())
+                         if self.screen_selector.itemData(i) == target_key), -1)
+        if selected < 0 and self.screen_key is not None:
+            self.screen_selector.addItem(f"Disconnected: {self.screen_name}", self.screen_key)
+            selected = self.screen_selector.count() - 1
+        self.screen_selector.setCurrentIndex(max(0, selected))
+        self.screen_selector.blockSignals(False)
+        self.screen_selector.setEnabled(not self.capturing and not self.text_entry_active)
         text = (f"Pinned: {self.screen_name}" if self.screen is not None else
-                f"Disconnected: {self.screen_name}" if self.screen_key is not None else "Screen not chosen")
+                f"Disconnected: {self.screen_name}" if self.screen_key is not None else "Choose annotation monitor")
         self.screen_label.setText(text)
-        self.screen_label.setToolTip(text + ". Moving controls does not move annotations.")
+        self.screen_selector.setToolTip(text + ". Moving controls does not move annotations.")
         self.move_screen_button.setEnabled(
             not self.capturing and self.screen_key is not None and
             self.controller.panel.screen() is not None and self.controller.panel.screen() != self.screen)
+        if hasattr(self, "capture_target"):
+            self.sync_capture_target()
+
+    def choose_screen(self, index):
+        key = self.screen_selector.itemData(index)
+        target = next((s for s in self.controller.app.screens() if self.screen_identity(s) == key), None)
+        if target is not None:
+            self.change_screen(target, confirm=bool(self.marks or self.history or self.future))
 
     def sync_screen(self, screens=None):
         screens = self.controller.app.screens() if screens is None else screens
@@ -1069,7 +1249,7 @@ class AnnotationTools(QWidget):
             self.overlay.hide()
             if self.controller.mode == "off":
                 self.controller.disarm_escape()
-            self.status.setText("Annotation screen disconnected. Marks kept; move to this screen to continue.")
+            self.status.setText("Annotation screen disconnected. Marks kept; choose a monitor in Tools to continue.")
         if self.screen is None and self.screen_key is not None:
             match = next((s for s in screens if self.screen_identity(s) == self.screen_key), None)
             if match is not None:
@@ -1091,35 +1271,44 @@ class AnnotationTools(QWidget):
         target = self.controller.panel.screen()
         if self.capturing or self.screen_key is None or target is None or target == self.screen:
             return
+        self.change_screen(target, confirm=True)
+
+    def change_screen(self, target, *, confirm=True):
+        if self.capturing or self.text_entry_active or QApplication.activeModalWidget() is not None or target == self.screen or target not in self.controller.app.screens():
+            return
         was_drawing = self.drawing
         self.interact()
-        answer = QMessageBox.question(
-            self.controller.panel, "Move annotation screen",
-            f"Move the annotation area from {self.screen_name} to {target.name()}?\n\n"
-            "All marks and undo history will be kept at the same positions relative to the screen. "
-            "Marks beyond a smaller screen's edges stay saved until you move back.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel)
+        answer = QMessageBox.StandardButton.Yes
+        if confirm:
+            answer = QMessageBox.question(
+                self.controller.panel, "Move annotation screen",
+                f"Move the annotation area from {self.screen_name} to {target.name()}?\n\n"
+                "All marks and undo history will be kept at the same positions relative to the screen. "
+                "Marks beyond a smaller screen's edges stay saved until you move back.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel)
         if answer == QMessageBox.StandardButton.Yes and target in self.controller.app.screens():
             self.bind_screen(target)
             if was_drawing:
                 self.start()
             else:
                 self.overlay.present(False)
-            self.status.setText(f"Annotations moved to {self.screen_name}")
+            self.status.setText(f"Annotation monitor: {self.screen_name}")
         elif was_drawing:
             self.start()
         self.sync_screen_controls()
 
     def start(self):
+        if self.capturing or self.text_entry_active or QApplication.activeModalWidget() is not None:
+            return
         c = self.controller
         self.sync_screen()
         if self.screen is None:
             if self.screen_key is not None:
                 self.sync_tool_buttons()
-                self.status.setText("Annotation screen disconnected. Marks kept; move to this screen to continue.")
+                self.status.setText("Annotation screen disconnected. Marks kept; choose a monitor in Tools to continue.")
                 return
-            target = c.selected_screen or c.panel.screen()
+            target = c.panel.screen()
             if target is None:
                 self.sync_tool_buttons()
                 return
@@ -1152,18 +1341,20 @@ class AnnotationTools(QWidget):
             self.controller.panel.raise_()
         if self.controller.mode == "off":
             self.controller.disarm_escape()
-        self.status.setText("Desktop interaction - click a tool or Pointer to resume drawing.")
+        self.status.setText("Desktop interaction - click Draw or a tool to resume (Ctrl+Shift+D).")
 
     def capture(self, *, save_to_file=False):
-        if self.capturing:
+        if self.capturing or self.text_entry_active or QApplication.activeModalWidget() is not None:
             return
         self.sync_screen()
         self.sync_capture_scope()
         if self.capture_scope.checkedId() == 1 and self.screen_key is not None and self.screen is None:
-            self.status.setText("Annotation screen disconnected. Move to this screen before capturing.")
+            self.status.setText("Annotation screen disconnected. Choose a monitor in Tools before capturing.")
             return
         self.capturing = True
+        self.sync_tool_buttons()
         self.sync_screen_controls()
+        self.capture_control.setEnabled(False)
         self.capture_button.setEnabled(False)
         self.save_button.setEnabled(False)
         c = self.controller
@@ -1216,6 +1407,8 @@ class AnnotationTools(QWidget):
             self.status.setText(str(error))
         finally:
             self.capturing = False
+            self.capture_control.setEnabled(True)
+            self.sync_tool_buttons()
             self.capture_button.setEnabled(True)
             self.save_button.setEnabled(True)
             self.sync_screen_controls()

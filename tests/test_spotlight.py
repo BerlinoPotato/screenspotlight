@@ -89,8 +89,8 @@ class AppTests(unittest.TestCase):
         from PySide6.QtCore import QSize
         self.c.show_panel()
         self.app.processEvents()
-        self.assertEqual(self.c.panel.size(), QSize(400, 400))
-        for size in (QSize(360, 320), QSize(700, 850), QSize(400, 400)):
+        self.assertEqual(self.c.panel.size(), QSize(480, min(800, self.c.panel.screen().availableGeometry().height() - 40)))
+        for size in (QSize(360, 480), QSize(700, 850), QSize(460, 680)):
             self.c.panel.resize(size)
             for index in (0, 1):
                 self.c.panel.tabs.setCurrentIndex(index)
@@ -100,7 +100,7 @@ class AppTests(unittest.TestCase):
                 self.assertEqual(scroll.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
                 if scroll.horizontalScrollBar().maximum() > 0:
                     self.assertTrue(scroll.horizontalScrollBar().isVisible())
-                if size.height() <= 400:
+                if size.height() <= 480:
                     self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
                 scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
                 self.assertTrue(self.c.panel.rect().contains(self.c.panel.version_label.geometry()))

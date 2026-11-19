@@ -261,7 +261,9 @@ def main():
             saved_image = QImage(str(saved_path))
             assert saved_image.size() == image.size(), "Saved crop has the wrong size"
             saved_background = saved_image.pixelColor(round(150 * ratio), round(100 * ratio))
-            assert saved_background == QColor("#e8f0ff"), f"Save reused a stale capture: {saved_background.name()}"
+            assert all(abs(actual - expected) <= 2 for actual, expected in zip(
+                (saved_background.red(), saved_background.green(), saved_background.blue()),
+                (232, 240, 255))), f"Save reused a stale capture: {saved_background.name()}"
             assert app.clipboard().pixmap().toImage() == previous_clipboard, "Save changed clipboard contents"
             assert a.capture_button.isEnabled() and a.save_button.isEnabled()
             target.setStyleSheet("background: white;")

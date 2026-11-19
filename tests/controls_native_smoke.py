@@ -39,8 +39,8 @@ def main():
         c.panel.move(650, 100)
         c.panel.tabs.setCurrentIndex(1)
         QTest.qWait(120)
-        assert c.panel.size() == QSize(400, 400)
-        for size in (QSize(360, 320), QSize(400, 400), QSize(700, 900)):
+        assert c.panel.size() == QSize(480, min(800, c.panel.screen().availableGeometry().height() - 40))
+        for size in (QSize(360, 480), QSize(460, 680), QSize(700, 900)):
             c.panel.resize(size)
             for index in (0, 1):
                 c.panel.tabs.setCurrentIndex(index)
@@ -51,7 +51,7 @@ def main():
                 assert c.panel.rect().contains(c.panel.version_label.geometry())
                 scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
                 QTest.qWait(40)
-        c.panel.resize(400, 400)
+        c.panel.resize(460, 680)
         c.panel.tabs.setCurrentIndex(1)
         c.panel.annotation_scroll.verticalScrollBar().setValue(0)
         point = a.overlay.mapFromGlobal(target.mapToGlobal(QPoint(100, 100)))

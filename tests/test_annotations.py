@@ -345,7 +345,7 @@ class AnnotationTests(unittest.TestCase):
         self.assertEqual(self.c.mode, "present")
         self.assertFalse(self.c.panel.isMinimized())
         self.assertTrue(self.c.panel.isVisible())
-        self.assertEqual(self.c.panel.status.text(), "Highlighter active")
+        self.assertEqual(self.c.panel.status.text(), "Horizontal highlighter active")
         panel_point = self.a.overlay.mapFromGlobal(self.c.panel.mapToGlobal(QPoint(30, 30)))
         self.assertFalse(self.a.overlay.mask().contains(panel_point))
         self.c.panel.move(300, 100)

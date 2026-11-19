@@ -23,3 +23,10 @@ a single large purple rectangle fully filled with solid purple crayon color, wit
 ## 24 Filled Circle.png
 
 a single large bright green circle fully filled with green crayon color, with a slightly darker green hand-drawn edge. Match the reference circle's hue; no hollow center.
+
+
+## 25 Text.png (0.1.40)
+
+Generated with the built-in ImageGen tool, transparent_background=true. The existing 02 Pen.png was a style reference. Original generated PNG and alpha are preserved. Used by Text before and after activation.
+
+Prompt: Use case: stylized-concept. One desktop annotation toolbar icon on a transparent background. Create three bold uppercase letters reading exactly ABC, horizontally side by side, in the existing playful wax-crayon/colored-pencil style, with slightly imperfect edges and subtle grain. Cyan-blue A, coral-red B, purple C; thick simple strokes, recognizable at toolbar size. Center letters, occupying about90% canvas width and55% height, with one short cyan underline. No tile, border, pen, extra objects, shadow or watermark.
